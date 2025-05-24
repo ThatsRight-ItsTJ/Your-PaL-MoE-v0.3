@@ -103,7 +103,7 @@ Ask for a free 1-day trial – no strings attached. Contact us via Chat or Disco
 © 2025 EXOMLAPI.COM | NOT AFFILIATED WITH ANY OFFICIAL ENTITIES
 
 <!--
-**exomlapi/exomlapi** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+test
 
 Here are some ideas to get you started:
 
