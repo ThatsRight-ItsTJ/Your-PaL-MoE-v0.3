@@ -90,7 +90,6 @@ Ask for a free 1-day trial – no strings attached. Contact us via Chat or Disco
 
 ## Contact & Support
 
-*   **Chat:** Available on our website.
 *   **Discord:** Join our Discord server for support, alternative payment methods, and community interaction.
 *   **Status Page:** Check the [Exomlapi Status](https://status.exomlapi.com) (assuming a status page exists, link if available otherwise remove).
 
@@ -98,21 +97,3 @@ Ask for a free 1-day trial – no strings attached. Contact us via Chat or Disco
 
 **EXOMLAPI - Unlimited AI tokens for builders who push boundaries.**
 
-*Total Tokens Processed (as of information provided): 5,497,455,876*
-
-© 2025 EXOMLAPI.COM | NOT AFFILIATED WITH ANY OFFICIAL ENTITIES
-
-<!--
-test
-
-Here are some ideas to get you started:
-
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: ...
--->
