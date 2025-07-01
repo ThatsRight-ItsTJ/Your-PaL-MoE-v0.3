@@ -4,9 +4,13 @@ const cors = require('cors');
 const path = require('path');
 const fs = require('fs');
 const { promisify } = require('util');
+const multer = require('multer');
+const FormData = require('form-data');
 
 const readFileAsync = promisify(fs.readFile);
 const writeFileAsync = promisify(fs.writeFile);
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 const PORT = 2715;
 const HOST = '0.0.0.0';
@@ -641,6 +645,569 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
     };
     if (lastErrorBody) {
         responsePayload.last_provider_error_body = lastErrorBody;
+app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
+    if (!providersConfig || !providersConfig.endpoints) {
+        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    }
+
+    const endpointConfig = providersConfig.endpoints[req.path];
+    if (!endpointConfig || !endpointConfig.models) {
+        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
+    }
+
+    const requestedModel = req.body.model;
+    if (!requestedModel) {
+        return res.status(400).json({ error: "Missing 'model' field in request body." });
+    }
+
+    const providers = endpointConfig.models[requestedModel];
+    if (!providers) {
+        return res.status(404).json({
+            error: {
+                code: "model_not_found",
+                message: `The model \`${requestedModel}\` does not exist or you do not have access to it.`,
+                param: null,
+                type: "invalid_request_error"
+            }
+        });
+    }
+
+    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+
+    let lastError = null;
+    let lastErrorBody = null;
+
+    for (const provider of sortedProviders) {
+        const providerName = provider.provider_name || 'Unknown';
+        const baseUrl = provider.base_url;
+        const apiKey = provider.api_key;
+        const model = provider.model;
+
+        if (!baseUrl || !apiKey) {
+            lastError = `Configuration error for provider ${providerName}`;
+            continue;
+        }
+
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+
+        const newRequestBody = { ...req.body, model: model };
+        const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
+
+        try {
+            const fetch = await import('node-fetch');
+            const headers = {
+                'Content-Type': req.headers['content-type'] || 'application/json',
+                'User-Agent': 'curl/7.68.0',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            };
+
+            if (!baseUrl.includes("/api/openai")) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
+
+            const proxyResponse = await fetch.default(targetUrl, {
+                method: 'POST',
+                headers: headers,
+                body: requestBodyBuffer,
+                timeout: 120000
+            });
+
+
+            const responseStatus = proxyResponse.status;
+            const responseBodyBuffer = await proxyResponse.buffer();
+
+            res.status(responseStatus);
+            for (const [key, value] of proxyResponse.headers.entries()) {
+                if (key.toLowerCase() === 'content-length') {
+                    res.setHeader('Content-Length', responseBodyBuffer.length);
+                } else if (!['transfer-encoding', 'connection', 'access-control-allow-origin'].includes(key.toLowerCase())) {
+                    res.setHeader(key, value);
+                }
+            }
+            if (!proxyResponse.headers.has('content-length')) {
+                res.setHeader('Content-Length', responseBodyBuffer.length);
+            }
+
+            res.send(responseBodyBuffer);
+
+            let tokensUsed = 1;
+            let explicitTokensFound = true;
+
+            if (typeof tokensUsed === 'number' && tokensUsed > 0) {
+                if (req.authenticatedApiKey) {
+                    const logPrefix = explicitTokensFound ? "explicit" : "estimated fallback";
+                    const providerMultiplier = provider.token_multiplier || 1.0;
+                    await updateUserTokenCount(req.authenticatedApiKey, tokensUsed, providerMultiplier);
+                }
+            }
+
+            return;
+        } catch (e) {
+            if (e.name === 'AbortError' || e.name === 'FetchError') {
+                lastError = `Network error contacting provider ${providerName}: ${e.message}`;
+                if (e.response && e.response.body) {
+                    try {
+                        lastErrorBody = await e.response.json();
+                    } catch {
+                        lastErrorBody = await e.response.text();
+                    }
+                }
+            } else {
+                lastError = `Unexpected error with provider ${providerName}: ${e.message}`;
+            }
+        }
+    }
+
+    const responsePayload = {
+        error: "All upstream providers failed",
+        details: lastError || "Unknown error"
+    };
+    if (lastErrorBody) {
+        responsePayload.last_provider_error_body = lastErrorBody;
+    }
+    res.status(502).json(responsePayload);
+});
+
+app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'), async (req, res) => {
+    if (!req.file) {
+        return res.status(400).json({ error: "Missing file for transcription." });
+    }
+
+    if (!providersConfig || !providersConfig.endpoints) {
+        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    }
+
+    const endpointConfig = providersConfig.endpoints[req.path];
+    if (!endpointConfig || !endpointConfig.models) {
+        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
+    }
+
+    const requestedModel = req.body.model;
+    if (!requestedModel) {
+        return res.status(400).json({ error: "Missing 'model' field in request body." });
+    }
+
+    const providers = endpointConfig.models[requestedModel];
+    if (!providers) {
+        return res.status(404).json({
+            error: {
+                code: "model_not_found",
+                message: `The model \`${requestedModel}\` does not exist or you do not have access to it.`,
+                param: null,
+                type: "invalid_request_error"
+            }
+        });
+    }
+
+    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+
+    let lastError = null;
+    let lastErrorBody = null;
+
+    for (const provider of sortedProviders) {
+        const providerName = provider.provider_name || 'Unknown';
+        const baseUrl = provider.base_url;
+        const apiKey = provider.api_key;
+        const model = provider.model;
+
+        if (!baseUrl || !apiKey) {
+            lastError = `Configuration error for provider ${providerName}`;
+            continue;
+        }
+
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+        
+        const formData = new FormData();
+        formData.append('file', req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
+        formData.append('model', model);
+        if (req.body.language) formData.append('language', req.body.language);
+        if (req.body.prompt) formData.append('prompt', req.body.prompt);
+        if (req.body.response_format) formData.append('response_format', req.body.response_format);
+        if (req.body.temperature) formData.append('temperature', req.body.temperature);
+
+
+        try {
+            const fetch = await import('node-fetch');
+            const headers = {
+                ...formData.getHeaders(),
+                'User-Agent': 'curl/7.68.0',
+                'Accept': '*/*',
+                'Connection': 'keep-alive',
+            };
+
+            if (!baseUrl.includes("/api/openai")) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
+
+            const proxyResponse = await fetch.default(targetUrl, {
+                method: 'POST',
+                headers: headers,
+                body: formData,
+                timeout: 120000
+            });
+
+            const responseStatus = proxyResponse.status;
+            const responseBodyBuffer = await proxyResponse.buffer();
+
+            res.status(responseStatus);
+            for (const [key, value] of proxyResponse.headers.entries()) {
+                if (key.toLowerCase() === 'content-length') {
+                    res.setHeader('Content-Length', responseBodyBuffer.length);
+                } else if (!['transfer-encoding', 'connection', 'access-control-allow-origin'].includes(key.toLowerCase())) {
+                    res.setHeader(key, value);
+                }
+            }
+            if (!proxyResponse.headers.has('content-length')) {
+                res.setHeader('Content-Length', responseBodyBuffer.length);
+            }
+
+            res.send(responseBodyBuffer);
+
+            let tokensUsed = 0;
+            let explicitTokensFound = false;
+
+            try {
+                const responseJson = JSON.parse(responseBodyBuffer.toString());
+                if (responseJson.text) {
+                    tokensUsed = Math.ceil(responseJson.text.length / 4);
+                } else {
+                    tokensUsed = 1;
+                    explicitTokensFound = true;
+                }
+            } catch(e) {
+                tokensUsed = 1;
+                explicitTokensFound = true;
+            }
+
+
+            if (typeof tokensUsed === 'number' && tokensUsed > 0) {
+                if (req.authenticatedApiKey) {
+                    const logPrefix = explicitTokensFound ? "explicit" : "estimated fallback";
+                    const providerMultiplier = provider.token_multiplier || 1.0;
+                    await updateUserTokenCount(req.authenticatedApiKey, tokensUsed, providerMultiplier);
+                }
+            }
+
+            return;
+        } catch (e) {
+            if (e.name === 'AbortError' || e.name === 'FetchError') {
+                lastError = `Network error contacting provider ${providerName}: ${e.message}`;
+                if (e.response && e.response.body) {
+                    try {
+                        lastErrorBody = await e.response.json();
+                    } catch {
+                        lastErrorBody = await e.response.text();
+                    }
+                }
+            } else {
+                lastError = `Unexpected error with provider ${providerName}: ${e.message}`;
+            }
+        }
+    }
+
+    const responsePayload = {
+        error: "All upstream providers failed",
+        details: lastError || "Unknown error"
+    };
+    if (lastErrorBody) {
+        responsePayload.last_provider_error_body = lastErrorBody;
+    }
+    res.status(502).json(responsePayload);
+});
+
+app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
+    if (!providersConfig || !providersConfig.endpoints) {
+        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    }
+
+    const endpointConfig = providersConfig.endpoints[req.path];
+    if (!endpointConfig || !endpointConfig.models) {
+        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
+    }
+
+    const requestedModel = req.body.model;
+    if (!requestedModel) {
+        return res.status(400).json({ error: "Missing 'model' field in request body." });
+    }
+
+    const providers = endpointConfig.models[requestedModel];
+    if (!providers) {
+        return res.status(404).json({
+            error: {
+                code: "model_not_found",
+                message: `The model \`${requestedModel}\` does not exist or you do not have access to it.`,
+                param: null,
+                type: "invalid_request_error"
+            }
+        });
+    }
+
+    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+
+    let lastError = null;
+    let lastErrorBody = null;
+
+    for (const provider of sortedProviders) {
+        const providerName = provider.provider_name || 'Unknown';
+        const baseUrl = provider.base_url;
+        const apiKey = provider.api_key;
+        const model = provider.model;
+
+        if (!baseUrl || !apiKey) {
+            lastError = `Configuration error for provider ${providerName}`;
+            continue;
+        }
+
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+
+        const newRequestBody = { ...req.body, model: model };
+        const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
+
+        try {
+            const fetch = await import('node-fetch');
+            const headers = {
+                'Content-Type': req.headers['content-type'] || 'application/json',
+                'User-Agent': 'curl/7.68.0',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            };
+
+            if (!baseUrl.includes("/api/openai")) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
+
+            const proxyResponse = await fetch.default(targetUrl, {
+                method: 'POST',
+                headers: headers,
+                body: requestBodyBuffer,
+                timeout: 120000
+            });
+
+
+            const responseStatus = proxyResponse.status;
+            const responseBodyBuffer = await proxyResponse.buffer();
+
+            res.status(responseStatus);
+            for (const [key, value] of proxyResponse.headers.entries()) {
+                if (key.toLowerCase() === 'content-length') {
+                    res.setHeader('Content-Length', responseBodyBuffer.length);
+                } else if (!['transfer-encoding', 'connection', 'access-control-allow-origin'].includes(key.toLowerCase())) {
+                    res.setHeader(key, value);
+                }
+            }
+            if (!proxyResponse.headers.has('content-length')) {
+                res.setHeader('Content-Length', responseBodyBuffer.length);
+            }
+
+            res.send(responseBodyBuffer);
+
+            let tokensUsed = 0;
+            if (req.body.input && typeof req.body.input === 'string') {
+                tokensUsed = req.body.input.length;
+            } else {
+                tokensUsed = 1;
+            }
+            
+            let explicitTokensFound = true;
+
+            if (typeof tokensUsed === 'number' && tokensUsed > 0) {
+                if (req.authenticatedApiKey) {
+                    const logPrefix = explicitTokensFound ? "explicit" : "estimated fallback";
+                    const providerMultiplier = provider.token_multiplier || 1.0;
+                    await updateUserTokenCount(req.authenticatedApiKey, tokensUsed, providerMultiplier);
+                }
+            }
+
+            return;
+        } catch (e) {
+            if (e.name === 'AbortError' || e.name === 'FetchError') {
+                lastError = `Network error contacting provider ${providerName}: ${e.message}`;
+                if (e.response && e.response.body) {
+                    try {
+                        lastErrorBody = await e.response.json();
+                    } catch {
+                        lastErrorBody = await e.response.text();
+                    }
+                }
+            } else {
+                lastError = `Unexpected error with provider ${providerName}: ${e.message}`;
+            }
+        }
+    }
+
+    const responsePayload = {
+        error: "All upstream providers failed",
+        details: lastError || "Unknown error"
+    };
+    if (lastErrorBody) {
+        responsePayload.last_provider_error_body = lastErrorBody;
+    }
+    res.status(502).json(responsePayload);
+});
+
+app.post('/v1/responses', authenticateRequest, async (req, res) => {
+    if (!providersConfig || !providersConfig.endpoints) {
+        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    }
+
+    const endpointConfig = providersConfig.endpoints[req.path];
+    if (!endpointConfig || !endpointConfig.models) {
+        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
+    }
+
+    const requestedModel = req.body.model;
+    if (!requestedModel) {
+        return res.status(400).json({ error: "Missing 'model' field in request body." });
+    }
+    
+    if (!req.body.input) {
+        return res.status(400).json({ error: "Missing 'input' field in request body for /v1/responses endpoint." });
+    }
+
+    const providers = endpointConfig.models[requestedModel];
+    if (!providers) {
+        return res.status(404).json({
+            error: {
+                code: "model_not_found",
+                message: `The model \`${requestedModel}\` does not exist or you do not have access to it.`,
+                param: null,
+                type: "invalid_request_error"
+            }
+        });
+    }
+
+    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+
+    let lastError = null;
+    let lastErrorBody = null;
+
+    for (const provider of sortedProviders) {
+        const providerName = provider.provider_name || 'Unknown';
+        const baseUrl = provider.base_url;
+        const apiKey = provider.api_key;
+        const model = provider.model;
+
+        if (!baseUrl || !apiKey) {
+            lastError = `Configuration error for provider ${providerName}`;
+            continue;
+        }
+
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+
+        const newRequestBody = { ...req.body, model: model };
+        const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
+
+        try {
+            const fetch = await import('node-fetch');
+            const headers = {
+                'Content-Type': req.headers['content-type'] || 'application/json',
+                'User-Agent': 'curl/7.68.0',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+            };
+
+            if (!baseUrl.includes("/api/openai")) {
+                headers['Authorization'] = `Bearer ${apiKey}`;
+            }
+
+            const proxyResponse = await fetch.default(targetUrl, {
+                method: 'POST',
+                headers: headers,
+                body: requestBodyBuffer,
+                timeout: 120000
+            });
+
+
+            const responseStatus = proxyResponse.status;
+            const responseBodyBuffer = await proxyResponse.buffer();
+
+            res.status(responseStatus);
+            for (const [key, value] of proxyResponse.headers.entries()) {
+                if (key.toLowerCase() === 'content-length') {
+                    res.setHeader('Content-Length', responseBodyBuffer.length);
+                } else if (!['transfer-encoding', 'connection', 'access-control-allow-origin'].includes(key.toLowerCase())) {
+                    res.setHeader(key, value);
+                }
+            }
+            if (!proxyResponse.headers.has('content-length')) {
+                res.setHeader('Content-Length', responseBodyBuffer.length);
+            }
+
+            res.send(responseBodyBuffer);
+
+            let tokensUsed = 0;
+            let explicitTokensFound = false;
+
+            try {
+                const responseJson = JSON.parse(responseBodyBuffer.toString());
+                if (responseJson.usage && responseJson.usage.total_tokens) {
+                    tokensUsed = responseJson.usage.total_tokens;
+                    explicitTokensFound = true;
+                } else {
+                    let outputText = "";
+                    if (responseJson.output && Array.isArray(responseJson.output)) {
+                        for (const item of responseJson.output) {
+                            if (item.type === 'message' && item.content && Array.isArray(item.content)) {
+                                for (const contentItem of item.content) {
+                                    if (contentItem.type === 'output_text' && contentItem.text) {
+                                        outputText += contentItem.text;
+                                    }
+                                }
+                            }
+                        }
+                    } else if (responseJson.output_text) {
+                        outputText = responseJson.output_text;
+                    }
+                    
+                    const inputTokens = Math.ceil((req.body.input || "").length / 4);
+                    const outputTokens = Math.ceil(outputText.length / 4);
+                    tokensUsed = inputTokens + outputTokens;
+                }
+            } catch(e) {
+                const inputTokens = Math.ceil((req.body.input || "").length / 4);
+                const outputTokens = Math.ceil(responseBodyBuffer.length / 4);
+                tokensUsed = inputTokens + outputTokens;
+            }
+
+
+            if (typeof tokensUsed === 'number' && tokensUsed > 0) {
+                if (req.authenticatedApiKey) {
+                    const logPrefix = explicitTokensFound ? "explicit" : "estimated fallback";
+                    const providerMultiplier = provider.token_multiplier || 1.0;
+                    await updateUserTokenCount(req.authenticatedApiKey, tokensUsed, providerMultiplier);
+                }
+            }
+
+            return;
+        } catch (e) {
+            if (e.name === 'AbortError' || e.name === 'FetchError') {
+                lastError = `Network error contacting provider ${providerName}: ${e.message}`;
+                if (e.response && e.response.body) {
+                    try {
+                        lastErrorBody = await e.response.json();
+                    } catch {
+                        lastErrorBody = await e.response.text();
+                    }
+                }
+            } else {
+                lastError = `Unexpected error with provider ${providerName}: ${e.message}`;
+            }
+        }
+    }
+
+    const responsePayload = {
+        error: "All upstream providers failed",
+        details: lastError || "Unknown error"
+    };
+    if (lastErrorBody) {
+        responsePayload.last_provider_error_body = lastErrorBody;
+    }
+    res.status(502).json(responsePayload);
+});
     }
     res.status(502).json(responsePayload);
 });
