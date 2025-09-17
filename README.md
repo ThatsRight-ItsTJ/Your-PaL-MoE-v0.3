@@ -167,6 +167,11 @@ const response = await APIClient.callTool({
 
 ## 🚀 Getting Started
 
+### Prerequisites
+- Node.js (v14 or higher)
+- npm or yarn
+- API keys from your preferred AI providers
+
 ### 1. Clone & Install
 ```bash
 git clone https://github.com/YOUR-USERNAME/Your PaL MoE.git
@@ -175,42 +180,126 @@ npm install
 ```
 
 ### 2. Configure Providers
-Edit [`providers.csv`](providers.csv) with your provider details and model specifications.
+Edit [`providers.csv`](providers.csv) with your provider details and model specifications:
 
-### 3. Run the API Server
+```csv
+Name,Base_URL,APIKey,Model(s),Priority,TokenMultiplier,ForceEndpoint
+OpenAI-Primary,https://api.openai.com/v1,sk-your-gpt-key,gpt-4|gpt-3.5-turbo,1,1.0,
+Anthropic-Secondary,https://api.anthropic.com,v1-your-claude-key,claude-3-sonnet|claude-3-haiku,2,1.0,
+```
+
+**CSV Fields:**
+- **Name**: Friendly name for your provider
+- **Base_URL**: API endpoint URL
+- **APIKey**: Your API key (leave empty for keyless providers)
+- **Model(s)**: Pipe-separated model IDs or URL to model list
+- **Priority**: Lower numbers = higher priority (1-99)
+- **TokenMultiplier**: Cost adjustment factor (default: 1.0)
+- **ForceEndpoint**: Override automatic endpoint detection (optional)
+
+### 3. Generate Configuration
+Convert your CSV to JSON configuration:
+```bash
+node csv-to-providers.js
+```
+
+### 4. Run the API Server
 ```bash
 npm start
 ```
 
-### 4. Connect API Client
-```javascript
-import { APIClient } from "@API/client";
+The server will start on `http://localhost:2715` by default.
 
-const client = new APIClient({
-  serverUrl: "http://localhost:3000"
-});
+### 5. Test Your Setup
+Open your browser to `http://localhost:2715` to see the status page with token usage statistics.
 
-// Discover available tools
-const tools = await client.listTools();
-console.log(tools); // Shows all model tools
+### 6. Connect API Client
 
-// Call specific model
-const response = await client.callTool({
-  name: "gpt-4-turbo",
-  arguments: {
-    messages: [{ role: "user", content: "Hello world" }]
-  }
-});
+#### Using curl (for testing):
+```bash
+# List available models
+curl http://localhost:2715/v1/models
 
-// Call multiple models with collaboration mode
-const multiResponse = await client.callTool({
-  name: "collaborate",
-  arguments: {
-    models: ["gpt-4-turbo", "claude-3-sonnet"],
-    messages: [{ role: "user", content: "Write a Python function" }]
-  }
-});
+# Chat with a model
+curl -X POST http://localhost:2715/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "model": "gpt-4",
+    "messages": [{"role": "user", "content": "Hello world"}]
+  }'
 ```
+
+#### Using JavaScript (Node.js):
+```javascript
+const fetch = require('node-fetch');
+
+// Chat with a model
+async function chat() {
+  const response = await fetch('http://localhost:2715/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': 'Bearer YOUR_API_KEY'
+    },
+    body: JSON.stringify({
+      model: 'gpt-4',
+      messages: [{ role: 'user', content: 'Hello world' }]
+    })
+  });
+  
+  const data = await response.json();
+  console.log(data.choices[0].message.content);
+}
+
+chat();
+```
+
+#### Using Python:
+```python
+import requests
+
+# Chat with a model
+response = requests.post(
+    'http://localhost:2715/v1/chat/completions',
+    headers={
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer YOUR_API_KEY'
+    },
+    json={
+        'model': 'gpt-4',
+        'messages': [{'role': 'user', 'content': 'Hello world'}]
+    }
+)
+
+print(response.json()['choices'][0]['message']['content'])
+```
+
+### 7. User Management (Optional)
+
+Create users with different plans using the admin API:
+```bash
+# Add a user with free plan (500k tokens daily)
+curl -X POST http://localhost:2715/admin/keys \
+  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "action": "add",
+    "api_key": "sk-user-key",
+    "username": "testuser",
+    "plan": "500k"
+  }'
+```
+
+### Available Endpoints
+
+- `GET /v1/models` - List available models
+- `POST /v1/chat/completions` - Chat completion
+- `POST /v1/images/generations` - Image generation
+- `POST /v1/audio/transcriptions` - Audio transcription
+- `POST /v1/audio/speech` - Text to speech
+- `GET /v1/usage` - Token usage statistics
+- `GET /admin/keys` - User management (requires admin key)
 
 ---
 

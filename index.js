@@ -6,6 +6,10 @@ const fs = require('fs');
 const { promisify } = require('util');
 const multer = require('multer');
 const FormData = require('form-data');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 const readFileAsync = promisify(fs.readFile);
 const writeFileAsync = promisify(fs.writeFile);
@@ -18,6 +22,25 @@ const CONFIG_FILE = 'providers.json';
 const USERS_CONFIG_FILE = 'users.json';
 const ADMIN_API_KEY = '';
 const STATIC_DIRECTORY = __dirname;
+const SECURITY_CONFIG_FILE = 'security-config.json';
+const JWT_SECRET = crypto.randomBytes(32).toString('hex');
+const API_KEY_SALT = crypto.randomBytes(16).toString('hex');
+
+// Default security configuration
+let securityConfig = {
+  enableApiKeyRotation: true,
+  apiKeyRotationInterval: 86400000, // 24 hours in milliseconds
+  enableRateLimiting: true,
+  rateLimitWindowMs: 900000, // 15 minutes
+  rateLimitMaxRequests: 100,
+  enableIpWhitelist: false,
+  ipWhitelist: ['127.0.0.1', '::1'],
+  enableRequestLogging: true,
+  maskSensitiveHeaders: true,
+  enableHelmet: true,
+  enableCSP: true,
+  allowedOrigins: ['*']
+};
 
 let providersConfig = { endpoints: {} };
 let usersConfig = { users: {} };
@@ -233,6 +256,17 @@ async function loadConfigurations() {
         }
     }
 
+    // Load security configuration
+    try {
+        const securityData = await readFileAsync(SECURITY_CONFIG_FILE, 'utf8');
+        const loadedSecurityConfig = JSON.parse(securityData);
+        securityConfig = { ...securityConfig, ...loadedSecurityConfig };
+    } catch (e) {
+        if (e.code !== 'ENOENT') {
+            console.warn('Failed to load security configuration, using defaults');
+        }
+    }
+
     providersConfig = loadedProvidersConfig;
     usersConfig = loadedUsersConfig;
     availableModelsList = _generateModelsList(providersConfig);
@@ -242,19 +276,203 @@ async function loadConfigurations() {
 
 const app = express();
 
+// Apply security middleware
+if (securityConfig.enableHelmet) {
+    app.use(helmet({
+        contentSecurityPolicy: securityConfig.enableCSP ? {
+            directives: {
+                defaultSrc: ["'self'"],
+                scriptSrc: ["'self'", "'unsafe-inline'"],
+                styleSrc: ["'self'", "'unsafe-inline'"],
+                imgSrc: ["'self'", "data:", "https:"],
+                connectSrc: ["'self'", "http:", "https:"]
+            }
+        } : false
+    }));
+}
+
+// Apply CORS with security headers
 app.use(cors({
-    origin: '*',
+    origin: (origin, callback) => {
+        if (!origin || securityConfig.allowedOrigins.includes('*') || securityConfig.allowedOrigins.includes(origin)) {
+            callback(null, true);
+        } else {
+            callback(new Error('Not allowed by CORS'));
+        }
+    },
     methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Key'],
     exposedHeaders: ['Content-Length', 'X-Powered-By'],
     credentials: true,
     maxAge: 86400
 }));
 
+// Apply rate limiting
+if (securityConfig.enableRateLimiting) {
+    const apiLimiter = rateLimit({
+        windowMs: securityConfig.rateLimitWindowMs,
+        max: securityConfig.rateLimitMaxRequests,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: {
+            error: "Too many requests from this IP, please try again later."
+        }
+    });
+    
+    // Apply rate limiting to all routes except admin
+    app.use((req, res, next) => {
+        if (req.path.startsWith('/admin/')) {
+            next();
+        } else {
+            apiLimiter(req, res, next);
+        }
+    });
+}
+
+// Apply IP whitelist if enabled
+if (securityConfig.enableIpWhitelist) {
+    app.use((req, res, next) => {
+        const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
+        
+        if (securityConfig.ipWhitelist.includes(clientIp) ||
+            securityConfig.ipWhitelist.includes('::ffff:' + clientIp)) {
+            next();
+        } else {
+            res.status(403).json({ error: "Access denied from this IP address." });
+        }
+    });
+}
+
+// Request logging middleware
+if (securityConfig.enableRequestLogging) {
+    app.use((req, res, next) => {
+        const startTime = Date.now();
+        
+        // Log request details
+        const logData = {
+            method: req.method,
+            path: req.path,
+            ip: req.ip,
+            userAgent: req.get('User-Agent'),
+            timestamp: new Date().toISOString(),
+            duration: Date.now() - startTime
+        };
+        
+        // Mask sensitive headers if enabled
+        if (securityConfig.maskSensitiveHeaders) {
+            const authHeader = req.headers.authorization;
+            if (authHeader) {
+                logData.authorization = authHeader.substring(0, 10) + '...';
+            }
+        }
+        
+        console.log('Request:', logData);
+        
+        // Log response details
+        res.on('finish', () => {
+            const endTime = Date.now();
+            console.log('Response:', {
+                method: req.method,
+                path: req.path,
+                statusCode: res.statusCode,
+                duration: endTime - startTime
+            });
+        });
+        
+        next();
+    });
+}
+
 app.use(express.json({ limit: '10mb' }));
 
 app.use(express.static(STATIC_DIRECTORY));
 
+
+/**
+ * Express middleware for authenticating requests based on API keys in `users.json`.
+ * Checks for API key validity, enabled status, and daily token limits.
+ * @param {import('express').Request} req - Express request object.
+ * @param {import('express').Response} res - Express response object.
+ * @param {import('express').NextFunction} next - Express next middleware function.
+ */
+/**
+ * Generates a secure API key.
+ * @returns {string} A new API key.
+ */
+function generateApiKey() {
+    return `sk-${crypto.randomBytes(24).toString('hex')}`;
+}
+
+/**
+ * Hashes an API key for storage.
+ * @param {string} apiKey - The API key to hash.
+ * @returns {string} The hashed API key.
+ */
+function hashApiKey(apiKey) {
+    return crypto.createHmac('sha256', API_KEY_SALT)
+        .update(apiKey)
+        .digest('hex');
+}
+
+/**
+ * Checks if an API key needs rotation.
+ * @param {object} user - The user object.
+ * @returns {boolean} True if rotation is needed.
+ */
+function needsApiKeyRotation(user) {
+    if (!securityConfig.enableApiKeyRotation) return false;
+    if (!user.last_rotation_timestamp) return true;
+    
+    const timeSinceLastRotation = Date.now() - user.last_rotation_timestamp;
+    return timeSinceLastRotation > securityConfig.apiKeyRotationInterval;
+}
+
+/**
+ * Rotates API keys for all users.
+ * @returns {Promise<void>}
+ */
+async function rotateApiKeys() {
+    if (!securityConfig.enableApiKeyRotation) return;
+    
+    console.log('Starting API key rotation...');
+    
+    let currentUsersConfig;
+    try {
+        const data = await readFileAsync(USERS_CONFIG_FILE, 'utf8');
+        currentUsersConfig = JSON.parse(data);
+    } catch (e) {
+        console.error('Failed to load users config for key rotation:', e);
+        return;
+    }
+    
+    const usersDict = currentUsersConfig.users;
+    let rotationCount = 0;
+    
+    for (const [oldKey, userData] of Object.entries(usersDict)) {
+        if (needsApiKeyRotation(userData)) {
+            const newKey = generateApiKey();
+            
+            // Move user data to new key
+            usersDict[newKey] = { ...userData };
+            delete usersDict[oldKey];
+            
+            // Update rotation timestamp
+            usersDict[newKey].last_rotation_timestamp = Date.now();
+            usersDict[newKey].last_updated_timestamp = Date.now();
+            
+            rotationCount++;
+            console.log(`Rotated key for user: ${userData.username || 'Unknown'} (${oldKey.slice(0, 8)}... -> ${newKey.slice(0, 8)}...)`);
+        }
+    }
+    
+    if (rotationCount > 0) {
+        await saveUsersConfig(currentUsersConfig);
+        usersConfig = currentUsersConfig;
+        console.log(`API key rotation completed. ${rotationCount} keys rotated.`);
+    } else {
+        console.log('No API keys needed rotation.');
+    }
+}
 
 /**
  * Express middleware for authenticating requests based on API keys in `users.json`.
@@ -269,16 +487,31 @@ async function authenticateRequest(req, res, next) {
         return next();
     }
 
+    // Check for API key in Authorization header
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return res.status(401).json({ error: "Authorization header missing or invalid format (Bearer <key> required)." });
+    let apiKey = null;
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        apiKey = authHeader.split(' ')[1];
+    } else if (req.headers['x-api-key']) {
+        apiKey = req.headers['x-api-key'];
     }
 
-    const apiKey = authHeader.split(' ');
+    if (!apiKey) {
+        return res.status(401).json({ error: "API key required in Authorization header or X-API-Key header." });
+    }
+
     const user_info = usersConfig.users[apiKey];
 
     if (!user_info || !user_info.enabled) {
         return res.status(403).json({ error: "Invalid or disabled API key." });
+    }
+
+    // Check if API key needs rotation
+    if (needsApiKeyRotation(user_info)) {
+        console.log(`API key rotation needed for user: ${user_info.username || 'Unknown'}`);
+        // Note: In a production environment, you might want to rotate the key here
+        // or notify the user to get a new key
     }
 
     const userPlan = user_info.plan || "0";
@@ -322,7 +555,7 @@ app.get('/admin/keys', async (req, res) => {
     const authHeader = req.headers.authorization;
     let providedApiKey = null;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-        providedApiKey = authHeader.split(' ');
+        providedApiKey = authHeader.split(' ')[1];
     }
 
     if (providedApiKey !== ADMIN_API_KEY) {
@@ -436,10 +669,76 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
         });
     }
 
-    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+    // Filter providers based on user plan and model availability
+    let filteredProviders = providers;
+    
+    // Check if user has a free plan
+    const userPlan = req.authenticatedApiKey ? usersConfig.users[req.authenticatedApiKey].plan : null;
+    const isFreePlan = userPlan && (userPlan === "0" || userPlan === "500k");
+    
+    if (isFreePlan) {
+        // Filter out non-free models for free plan users
+        filteredProviders = providers.filter(provider => {
+            // Check if model is marked as free
+            if (provider.metadata && provider.metadata.raw) {
+                // Check is_free flag first
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
+                }
+                // Check premium_model flag
+                if (typeof provider.metadata.raw.premium_model === 'boolean') {
+                    return !provider.metadata.raw.premium_model;
+                }
+                // Check tier (models with tier 'seed' are typically free)
+                if (typeof provider.metadata.raw.tier === 'string') {
+                    return provider.metadata.raw.tier === 'seed';
+                }
+            }
+            // If no clear indication, assume it's a paid model and filter it out for free users
+            return false;
+        });
+        
+        // If no providers left after filtering, return an error
+        if (filteredProviders.length === 0) {
+            return res.status(403).json({
+                error: {
+                    code: "model_not_available",
+                    message: `The model \`${requestedModel}\` is not available for free users. Please upgrade your plan to access this model.`,
+                    param: null,
+                    type: "forbidden_error"
+                }
+            });
+        }
+    }
+
+    // Sort providers by priority and cost (lower cost first for free models, then priority)
+    const sortedProviders = filteredProviders.sort((a, b) => {
+      // First, check if one is free and the other is not
+      const aIsFree = a.metadata?.is_free || false;
+      const bIsFree = b.metadata?.is_free || false;
+      
+      if (aIsFree && !bIsFree) return -1; // Free models come first
+      if (!aIsFree && bIsFree) return 1;  // Non-free models come later
+      
+      // If both are free or both are paid, sort by priority
+      const aPriority = a.priority || 99;
+      const bPriority = b.priority || 99;
+      
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+      
+      // If priorities are the same, sort by cost (lower cost first)
+      const aCost = a.metadata?.cost_per_token || 999999;
+      const bCost = b.metadata?.cost_per_token || 999999;
+      
+      return aCost - bCost;
+    });
 
     let lastError = null;
     let lastErrorBody = null;
+    let fallbackAttempts = 0;
+    const maxFallbackAttempts = 3; // Maximum number of fallback attempts
 
     for (const provider of sortedProviders) {
         const providerName = provider.provider_name || 'Unknown';
@@ -452,7 +751,7 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -624,7 +923,28 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
 
             return;
         } catch (e) {
-            if (e.name === 'AbortError' || e.name === 'FetchError') {
+            // Check if this is a provider denial or rate limit error
+            let isProviderDenial = false;
+            let isRateLimit = false;
+            
+            if (e.response && e.response.status) {
+                const status = e.response.status;
+                // Check for access denied errors (403)
+                if (status === 403) {
+                    isProviderDenial = true;
+                    lastError = `Access denied by provider ${providerName}: ${e.message}`;
+                }
+                // Check for rate limit errors (429)
+                else if (status === 429) {
+                    isRateLimit = true;
+                    lastError = `Rate limit exceeded for provider ${providerName}: ${e.message}`;
+                }
+                // Check for daily token limit errors
+                else if (status === 402 && e.message && e.message.includes('token')) {
+                    isRateLimit = true;
+                    lastError = `Daily token limit reached for provider ${providerName}: ${e.message}`;
+                }
+            } else if (e.name === 'AbortError' || e.name === 'FetchError') {
                 lastError = `Network error contacting provider ${providerName}: ${e.message}`;
                 if (e.response && e.response.body) {
                     try {
@@ -636,6 +956,14 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
             } else {
                 lastError = `Unexpected error with provider ${providerName}: ${e.message}`;
             }
+            
+            // If this was a provider denial or rate limit, try the next provider
+            if (isProviderDenial || isRateLimit) {
+                fallbackAttempts++;
+                if (fallbackAttempts < maxFallbackAttempts && sortedProviders.length > 1) {
+                    continue; // Try the next provider
+                }
+            }
         }
     }
 
@@ -645,7 +973,12 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
     };
     if (lastErrorBody) {
         responsePayload.last_provider_error_body = lastErrorBody;
+    }
+    res.status(502).json(responsePayload);
+});
+
 app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
+
     if (!providersConfig || !providersConfig.endpoints) {
         return res.status(500).json({ error: "Provider configuration is missing or invalid." });
     }
@@ -672,7 +1005,71 @@ app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
         });
     }
 
-    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+    // Filter providers based on user plan and model availability
+    let filteredProviders = providers;
+    
+    // Check if user has a free plan
+    const userPlan = req.authenticatedApiKey ? usersConfig.users[req.authenticatedApiKey].plan : null;
+    const isFreePlan = userPlan && (userPlan === "0" || userPlan === "500k");
+    
+    if (isFreePlan) {
+        // Filter out non-free models for free plan users
+        filteredProviders = providers.filter(provider => {
+            // Check if model is marked as free
+            if (provider.metadata && provider.metadata.raw) {
+                // Check is_free flag first
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
+                }
+                // Check premium_model flag
+                if (typeof provider.metadata.raw.premium_model === 'boolean') {
+                    return !provider.metadata.raw.premium_model;
+                }
+                // Check tier (models with tier 'seed' are typically free)
+                if (typeof provider.metadata.raw.tier === 'string') {
+                    return provider.metadata.raw.tier === 'seed';
+                }
+            }
+            // If no clear indication, assume it's a paid model and filter it out for free users
+            return false;
+        });
+        
+        // If no providers left after filtering, return an error
+        if (filteredProviders.length === 0) {
+            return res.status(403).json({
+                error: {
+                    code: "model_not_available",
+                    message: `The model \`${requestedModel}\` is not available for free users. Please upgrade your plan to access this model.`,
+                    param: null,
+                    type: "forbidden_error"
+                }
+            });
+        }
+    }
+
+    // Sort providers by priority and cost (lower cost first for free models, then priority)
+    const sortedProviders = filteredProviders.sort((a, b) => {
+      // First, check if one is free and the other is not
+      const aIsFree = a.metadata?.is_free || false;
+      const bIsFree = b.metadata?.is_free || false;
+      
+      if (aIsFree && !bIsFree) return -1; // Free models come first
+      if (!aIsFree && bIsFree) return 1;  // Non-free models come later
+      
+      // If both are free or both are paid, sort by priority
+      const aPriority = a.priority || 99;
+      const bPriority = b.priority || 99;
+      
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+      
+      // If priorities are the same, sort by cost (lower cost first)
+      const aCost = a.metadata?.cost_per_token || 999999;
+      const bCost = b.metadata?.cost_per_token || 999999;
+      
+      return aCost - bCost;
+    });
 
     let lastError = null;
     let lastErrorBody = null;
@@ -688,7 +1085,7 @@ app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -801,7 +1198,71 @@ app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'),
         });
     }
 
-    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+    // Filter providers based on user plan and model availability
+    let filteredProviders = providers;
+    
+    // Check if user has a free plan
+    const userPlan = req.authenticatedApiKey ? usersConfig.users[req.authenticatedApiKey].plan : null;
+    const isFreePlan = userPlan && (userPlan === "0" || userPlan === "500k");
+    
+    if (isFreePlan) {
+        // Filter out non-free models for free plan users
+        filteredProviders = providers.filter(provider => {
+            // Check if model is marked as free
+            if (provider.metadata && provider.metadata.raw) {
+                // Check is_free flag first
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
+                }
+                // Check premium_model flag
+                if (typeof provider.metadata.raw.premium_model === 'boolean') {
+                    return !provider.metadata.raw.premium_model;
+                }
+                // Check tier (models with tier 'seed' are typically free)
+                if (typeof provider.metadata.raw.tier === 'string') {
+                    return provider.metadata.raw.tier === 'seed';
+                }
+            }
+            // If no clear indication, assume it's a paid model and filter it out for free users
+            return false;
+        });
+        
+        // If no providers left after filtering, return an error
+        if (filteredProviders.length === 0) {
+            return res.status(403).json({
+                error: {
+                    code: "model_not_available",
+                    message: `The model \`${requestedModel}\` is not available for free users. Please upgrade your plan to access this model.`,
+                    param: null,
+                    type: "forbidden_error"
+                }
+            });
+        }
+    }
+
+    // Sort providers by priority and cost (lower cost first for free models, then priority)
+    const sortedProviders = filteredProviders.sort((a, b) => {
+      // First, check if one is free and the other is not
+      const aIsFree = a.metadata?.is_free || false;
+      const bIsFree = b.metadata?.is_free || false;
+      
+      if (aIsFree && !bIsFree) return -1; // Free models come first
+      if (!aIsFree && bIsFree) return 1;  // Non-free models come later
+      
+      // If both are free or both are paid, sort by priority
+      const aPriority = a.priority || 99;
+      const bPriority = b.priority || 99;
+      
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+      
+      // If priorities are the same, sort by cost (lower cost first)
+      const aCost = a.metadata?.cost_per_token || 999999;
+      const bCost = b.metadata?.cost_per_token || 999999;
+      
+      return aCost - bCost;
+    });
 
     let lastError = null;
     let lastErrorBody = null;
@@ -817,7 +1278,7 @@ app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'),
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
         
         const formData = new FormData();
         formData.append('file', req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
@@ -937,14 +1398,91 @@ app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
         return res.status(404).json({
             error: {
                 code: "model_not_found",
-                message: `The model \`${requestedModel}\` does not exist or you do not have access to it.`,
+                message: `The model \`${requestedModel}\` does not exist or you do not access to it.`,
                 param: null,
                 type: "invalid_request_error"
             }
         });
     }
 
-    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+    // Filter providers based on user plan and model availability
+    let filteredProviders = providers;
+    
+    // Check if user has a free plan
+    const userPlan = req.authenticatedApiKey ? usersConfig.users[req.authenticatedApiKey].plan : null;
+    const isFreePlan = userPlan && (userPlan === "0" || userPlan === "500k");
+    
+    if (isFreePlan) {
+        // Filter out non-free models for free plan users
+        filteredProviders = providers.filter(provider => {
+            // Check if model is marked as free
+            if (provider.metadata && provider.metadata.raw) {
+                // Check is_free flag first
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
+                }
+                // Check premium_model flag
+                if (typeof provider.metadata.raw.premium_model === 'boolean') {
+                    return !provider.metadata.raw.premium_model;
+                }
+                // Check tier (models with tier 'seed' are typically free)
+                if (typeof provider.metadata.raw.tier === 'string') {
+                    return provider.metadata.raw.tier === 'seed';
+                }
+            }
+            
+            // Check cost information from the new rate_limit_cost_info field
+            if (provider.metadata && provider.metadata.rate_limit_cost_info) {
+                const costInfo = provider.metadata.rate_limit_cost_info;
+                if (costInfo.is_free) {
+                    return true;
+                }
+                // If cost is very low (like 0.001), consider it free for free plan users
+                if (costInfo.cost_per_token && costInfo.cost_per_token <= 0.001) {
+                    return true;
+                }
+            }
+            
+            // If no clear indication, assume it's a paid model and filter it out for free users
+            return false;
+        });
+        
+        // If no providers left after filtering, return an error
+        if (filteredProviders.length === 0) {
+            return res.status(403).json({
+                error: {
+                    code: "model_not_available",
+                    message: `The model \`${requestedModel}\` is not available for free users. Please upgrade your plan to access this model.`,
+                    param: null,
+                    type: "forbidden_error"
+                }
+            });
+        }
+    }
+
+    // Sort providers by priority and cost (lower cost first for free models, then priority)
+    const sortedProviders = filteredProviders.sort((a, b) => {
+      // First, check if one is free and the other is not
+      const aIsFree = a.metadata?.is_free || false;
+      const bIsFree = b.metadata?.is_free || false;
+      
+      if (aIsFree && !bIsFree) return -1; // Free models come first
+      if (!aIsFree && bIsFree) return 1;  // Non-free models come later
+      
+      // If both are free or both are paid, sort by priority
+      const aPriority = a.priority || 99;
+      const bPriority = b.priority || 99;
+      
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+      
+      // If priorities are the same, sort by cost (lower cost first)
+      const aCost = a.metadata?.cost_per_token || 999999;
+      const bCost = b.metadata?.cost_per_token || 999999;
+      
+      return aCost - bCost;
+    });
 
     let lastError = null;
     let lastErrorBody = null;
@@ -960,7 +1498,7 @@ app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -1079,7 +1617,84 @@ app.post('/v1/responses', authenticateRequest, async (req, res) => {
         });
     }
 
-    const sortedProviders = providers.sort((a, b) => (a.priority || 99) - (b.priority || 99));
+    // Filter providers based on user plan and model availability
+    let filteredProviders = providers;
+    
+    // Check if user has a free plan
+    const userPlan = req.authenticatedApiKey ? usersConfig.users[req.authenticatedApiKey].plan : null;
+    const isFreePlan = userPlan && (userPlan === "0" || userPlan === "500k");
+    
+    if (isFreePlan) {
+        // Filter out non-free models for free plan users
+        filteredProviders = providers.filter(provider => {
+            // Check if model is marked as free
+            if (provider.metadata && provider.metadata.raw) {
+                // Check is_free flag first
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
+                }
+                // Check premium_model flag
+                if (typeof provider.metadata.raw.premium_model === 'boolean') {
+                    return !provider.metadata.raw.premium_model;
+                }
+                // Check tier (models with tier 'seed' are typically free)
+                if (typeof provider.metadata.raw.tier === 'string') {
+                    return provider.metadata.raw.tier === 'seed';
+                }
+            }
+            
+            // Check cost information from the new rate_limit_cost_info field
+            if (provider.metadata && provider.metadata.rate_limit_cost_info) {
+                const costInfo = provider.metadata.rate_limit_cost_info;
+                if (costInfo.is_free) {
+                    return true;
+                }
+                // If cost is very low (like 0.001), consider it free for free plan users
+                if (costInfo.cost_per_token && costInfo.cost_per_token <= 0.001) {
+                    return true;
+                }
+            }
+            
+            // If no clear indication, assume it's a paid model and filter it out for free users
+            return false;
+        });
+        
+        // If no providers left after filtering, return an error
+        if (filteredProviders.length === 0) {
+            return res.status(403).json({
+                error: {
+                    code: "model_not_available",
+                    message: `The model \`${requestedModel}\` is not available for free users. Please upgrade your plan to access this model.`,
+                    param: null,
+                    type: "forbidden_error"
+                }
+            });
+        }
+    }
+
+    // Sort providers by priority and cost (lower cost first for free models, then priority)
+    const sortedProviders = filteredProviders.sort((a, b) => {
+      // First, check if one is free and the other is not
+      const aIsFree = a.metadata?.is_free || false;
+      const bIsFree = b.metadata?.is_free || false;
+      
+      if (aIsFree && !bIsFree) return -1; // Free models come first
+      if (!aIsFree && bIsFree) return 1;  // Non-free models come later
+      
+      // If both are free or both are paid, sort by priority
+      const aPriority = a.priority || 99;
+      const bPriority = b.priority || 99;
+      
+      if (aPriority !== bPriority) {
+        return aPriority - bPriority;
+      }
+      
+      // If priorities are the same, sort by cost (lower cost first)
+      const aCost = a.metadata?.cost_per_token || 999999;
+      const bCost = b.metadata?.cost_per_token || 999999;
+      
+      return aCost - bCost;
+    });
 
     let lastError = null;
     let lastErrorBody = null;
@@ -1095,7 +1710,7 @@ app.post('/v1/responses', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path}`;
+        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -1208,9 +1823,6 @@ app.post('/v1/responses', authenticateRequest, async (req, res) => {
     }
     res.status(502).json(responsePayload);
 });
-    }
-    res.status(502).json(responsePayload);
-});
 
 /**
  * POST /admin/keys
@@ -1220,7 +1832,7 @@ app.post('/admin/keys', async (req, res) => {
     const authHeader = req.headers.authorization;
     let providedApiKey = null;
     if (authHeader && authHeader.startsWith('Bearer ')) {
-        providedApiKey = authHeader.split(' ');
+        providedApiKey = authHeader.split(' ')[1];
     }
 
     if (providedApiKey !== ADMIN_API_KEY) {
@@ -1534,6 +2146,13 @@ async function startNewServerInstance() {
     } catch (e) {
         process.exit(1);
     }
+}
+
+// Start API key rotation scheduler
+if (securityConfig.enableApiKeyRotation) {
+    const rotationIntervalMs = securityConfig.apiKeyRotationInterval;
+    setInterval(rotateApiKeys, rotationIntervalMs);
+    console.log(`API key rotation scheduled every ${rotationIntervalMs / 1000 / 60 / 60} hours`);
 }
 
 startServer();

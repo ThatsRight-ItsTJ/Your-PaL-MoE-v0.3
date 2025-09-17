@@ -66,6 +66,70 @@ function parseNumber(n, fallback) {
   return Number.isFinite(v) ? v : fallback;
 }
 
+/**
+ * Parse rate limit/cost information from CSV column
+ */
+function parseRateLimitCostInfo(infoStr) {
+  if (!infoStr || typeof infoStr !== 'string') {
+    return {
+      is_free: false,
+      daily_limit: null,
+      rate_limit: null,
+      cost_per_token: null,
+      cost_type: 'unknown'
+    };
+  }
+  
+  const info = infoStr.toLowerCase().trim();
+  const result = {
+    is_free: false,
+    daily_limit: null,
+    rate_limit: null,
+    cost_per_token: null,
+    cost_type: 'unknown'
+  };
+  
+  // Check for free indicators
+  if (info.includes('free') || info.includes('no cost') || info.includes('0')) {
+    result.is_free = true;
+  }
+  
+  // Extract daily limits
+  const dailyLimitMatch = info.match(/(\d+)\s*(per day|daily|day)/i);
+  if (dailyLimitMatch) {
+    result.daily_limit = parseInt(dailyLimitMatch[1]);
+  }
+  
+  // Extract rate limits (requests per minute/second)
+  const rateLimitMatch = info.match(/(\d+)\s*(per minute|per second|requests\/?s?|r\/?s?)/i);
+  if (rateLimitMatch) {
+    const value = parseInt(rateLimitMatch[1]);
+    const unit = rateLimitMatch[2].toLowerCase();
+    
+    if (unit.includes('minute')) {
+      result.rate_limit = { value, unit: 'per_minute' };
+    } else if (unit.includes('second')) {
+      result.rate_limit = { value, unit: 'per_second' };
+    }
+  }
+  
+  // Extract cost information
+  const costMatch = info.match(/(\d+\.?\d*)\s*(credits?|tokens?|dollars?|\$)/i);
+  if (costMatch) {
+    result.cost_per_token = parseFloat(costMatch[1]);
+    result.cost_type = costMatch[2].toLowerCase();
+  }
+  
+  // Check for specific free model indicators
+  if (info.includes('price multiplier of 0.001') || info.includes('0.001')) {
+    result.cost_per_token = 0.001;
+    result.cost_type = 'multiplier';
+    result.is_free = true;
+  }
+  
+  return result;
+}
+
 function normalizeModelId(raw) {
   if (!raw) return '';
   let m = cleanString(raw);
@@ -817,6 +881,10 @@ async function generateProvidersJSON(csvPath, outputPath) {
       const priority = parseNumber(getCol(row, ['Priority', 'priority']), 99);
       const tokenMultiplier = parseNumber(getCol(row, ['TokenMultiplier', 'token_multiplier']), 1.0);
       const forceEndpoint = cleanString(getCol(row, ['ForceEndpoint', 'Endpoint', 'endpoint', 'type']));
+      
+      // Extract and parse rate limit/cost information
+      const rateLimitCostInfo = cleanString(getCol(row, ['Rate Limit/Cost Info', 'RateLimit', 'CostInfo', 'rate_limit', 'cost_info']));
+      const parsedCostInfo = parseRateLimitCostInfo(rateLimitCostInfo);
 
       // Required field validation
       if (!providerName) {
@@ -884,7 +952,15 @@ async function generateProvidersJSON(csvPath, outputPath) {
           priority: priority,
           token_multiplier: tokenMultiplier,
           capabilities: entry.capabilities || [],
-          metadata: entry.meta || {}
+          metadata: {
+            ...entry.meta,
+            rate_limit_cost_info: parsedCostInfo,
+            is_free: parsedCostInfo.is_free,
+            daily_limit: parsedCostInfo.daily_limit,
+            rate_limit: parsedCostInfo.rate_limit,
+            cost_per_token: parsedCostInfo.cost_per_token,
+            cost_type: parsedCostInfo.cost_type
+          }
         };
 
         addModel(results, endpoint, modelId, providerConfig);
