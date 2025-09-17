@@ -1,19 +1,42 @@
 {
-  "name": "express-proxy",
-  "version": "1.0.0",
-  "description": "",
+  "name": "your-pal-moe",
+  "version": "0.3.0",
+  "description": "API Server for Multi-Provider AI Access with Named Tools",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node index.js",
+    "dev": "node index.js",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "generate": "node csv-to-providers.js",
+    "watch": "WATCH=1 node csv-to-providers.js",
+    "build-profiles": "node scripts/build-model-profile.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "keywords": [
+    "ai",
+    "moe",
+    "api",
+    "proxy",
+    "openai",
+    "anthropic",
+    "huggingface",
+    "multi-provider",
+    "named-tools"
+  ],
+  "author": "Your PaL MoE Team",
+  "license": "MIT",
   "dependencies": {
     "chokidar": "^4.0.3",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "multer": "^1.4.5-lts.1",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "csv-parser": "^3.0.0",
+    "joi": "^17.11.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Dyna‑MoE: CSV → providers.json generator
+ * Enhanced CSV → providers.json generator with HuggingFace API integration
+ * - HuggingFace model search and capability detection
  * - Model fetching (URL or delimited list)
  * - Endpoint inference (chat, embeddings, images, audio, vision)
  * - Hot reload (file watcher with debounce)
@@ -13,13 +14,20 @@
  *   TIMEOUT_MS=12000
  *   RETRIES=2
  *   CONCURRENCY=6
+ *   HF_API_KEY=your_huggingface_api_key
  */
 
 const fs = require('fs');
 const path = require('path');
-const axios = require('axios');
 const csvParser = require('csv-parser');
 const { setTimeout: delay } = require('timers/promises');
+
+// Use node-fetch for HTTP requests
+let fetch;
+(async () => {
+  const nodeFetch = await import('node-fetch');
+  fetch = nodeFetch.default;
+})();
 
 /* ------------------------------ Config ------------------------------ */
 
@@ -30,6 +38,7 @@ const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const TIMEOUT_MS = Number(process.env.TIMEOUT_MS || 12000);
 const RETRIES = Number(process.env.RETRIES || 2);
 const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY || 6));
+const HF_API_KEY = process.env.HF_API_KEY || '';
 
 /* ------------------------------ Logger ------------------------------ */
 
@@ -66,8 +75,12 @@ function normalizeModelId(raw) {
   // Common qualifiers like ":free"
   m = m.replace(/:free$/i, '');
 
-  // If it's a namespaced id like "org/model", take model (keep full if useful)
-  // We'll keep full unless it's obviously a URL path
+  // If it's a namespaced id like "org/model", keep full format for HF models
+  if (m.includes('/') && !m.includes('://')) {
+    return m; // Keep HuggingFace format like "microsoft/DialoGPT-medium"
+  }
+
+  // If it's a URL, extract model name
   if (m.includes('://')) {
     try {
       const u = new URL(m);
@@ -82,6 +95,250 @@ function normalizeModelId(raw) {
   return m;
 }
 
+/* ------------------------------ HuggingFace API Integration ------------------------------ */
+
+class HuggingFaceAPI {
+  constructor(apiKey = '') {
+    this.apiKey = apiKey;
+    this.baseUrl = 'https://huggingface.co/api';
+    this.headers = {
+      'User-Agent': 'Your-PaL-MoE/0.3',
+      'Accept': 'application/json'
+    };
+    
+    if (this.apiKey) {
+      this.headers['Authorization'] = `Bearer ${this.apiKey}`;
+    }
+  }
+
+  /**
+   * Search models on HuggingFace
+   */
+  async searchModels(query = '', options = {}) {
+    const params = new URLSearchParams({
+      search: query,
+      limit: options.limit || 100,
+      sort: options.sort || 'downloads',
+      direction: options.direction || -1,
+      ...options.filters
+    });
+
+    const url = `${this.baseUrl}/models?${params}`;
+    
+    try {
+      const response = await this.httpGet(url);
+      return this.parseModelSearchResults(response);
+    } catch (error) {
+      log('error', `HuggingFace model search failed:`, error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get model details
+   */
+  async getModelDetails(modelId) {
+    const url = `${this.baseUrl}/models/${modelId}`;
+    
+    try {
+      const response = await this.httpGet(url);
+      return this.parseModelDetails(response);
+    } catch (error) {
+      log('warn', `Failed to get details for model ${modelId}:`, error.message);
+      return null;
+    }
+  }
+
+  /**
+   * Get models by pipeline tag
+   */
+  async getModelsByPipeline(pipelineTag, limit = 50) {
+    return await this.searchModels('', {
+      limit,
+      filters: { pipeline_tag: pipelineTag }
+    });
+  }
+
+  /**
+   * Get popular models for text generation
+   */
+  async getPopularTextModels(limit = 20) {
+    return await this.getModelsByPipeline('text-generation', limit);
+  }
+
+  /**
+   * Get embedding models
+   */
+  async getEmbeddingModels(limit = 20) {
+    return await this.getModelsByPipeline('feature-extraction', limit);
+  }
+
+  /**
+   * Get image generation models
+   */
+  async getImageModels(limit = 20) {
+    return await this.getModelsByPipeline('text-to-image', limit);
+  }
+
+  /**
+   * HTTP GET with retries
+   */
+  async httpGet(url) {
+    let lastErr;
+    const maxDelay = 30000;
+    const baseDelay = 1000;
+    
+    for (let attempt = 0; attempt <= RETRIES; attempt++) {
+      try {
+        const response = await fetch(url, {
+          headers: this.headers,
+          timeout: TIMEOUT_MS
+        });
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        return await response.json();
+      } catch (err) {
+        lastErr = err;
+        
+        if (attempt < RETRIES) {
+          const delayMs = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
+          const jitter = Math.random() * 1000;
+          const totalDelay = delayMs + jitter;
+          
+          log('warn', `HF API request failed (attempt ${attempt + 1}/${RETRIES + 1}):`, err.message);
+          await delay(totalDelay);
+        }
+      }
+    }
+    
+    throw lastErr;
+  }
+
+  /**
+   * Parse model search results
+   */
+  parseModelSearchResults(data) {
+    if (!Array.isArray(data)) return [];
+
+    return data.map(model => ({
+      id: model.id || model.modelId,
+      name: model.id || model.modelId,
+      pipeline_tag: model.pipeline_tag,
+      tags: model.tags || [],
+      downloads: model.downloads || 0,
+      likes: model.likes || 0,
+      created_at: model.created_at,
+      last_modified: model.last_modified,
+      capabilities: this.inferCapabilities(model),
+      provider_data: {
+        huggingface: {
+          author: model.author,
+          sha: model.sha,
+          private: model.private,
+          gated: model.gated
+        }
+      }
+    }));
+  }
+
+  /**
+   * Parse model details
+   */
+  parseModelDetails(model) {
+    return {
+      id: model.id || model.modelId,
+      name: model.id || model.modelId,
+      description: model.description,
+      pipeline_tag: model.pipeline_tag,
+      tags: model.tags || [],
+      downloads: model.downloads || 0,
+      likes: model.likes || 0,
+      created_at: model.created_at,
+      last_modified: model.last_modified,
+      capabilities: this.inferCapabilities(model),
+      config: model.config,
+      provider_data: {
+        huggingface: model
+      }
+    };
+  }
+
+  /**
+   * Infer model capabilities from HuggingFace metadata
+   */
+  inferCapabilities(model) {
+    const capabilities = [];
+    const pipelineTag = model.pipeline_tag;
+    const tags = model.tags || [];
+    const modelId = (model.id || '').toLowerCase();
+
+    // Pipeline tag based capabilities
+    switch (pipelineTag) {
+      case 'text-generation':
+        capabilities.push('text-generation', 'conversation');
+        break;
+      case 'text2text-generation':
+        capabilities.push('text-generation', 'translation', 'summarization');
+        break;
+      case 'feature-extraction':
+        capabilities.push('embeddings', 'similarity');
+        break;
+      case 'text-to-image':
+        capabilities.push('image-generation');
+        break;
+      case 'image-to-text':
+        capabilities.push('vision', 'image-understanding', 'ocr');
+        break;
+      case 'automatic-speech-recognition':
+        capabilities.push('speech-to-text', 'transcription');
+        break;
+      case 'text-to-speech':
+        capabilities.push('text-to-speech', 'voice-synthesis');
+        break;
+      case 'conversational':
+        capabilities.push('conversation', 'chatbot');
+        break;
+      case 'question-answering':
+        capabilities.push('question-answering', 'reasoning');
+        break;
+      case 'summarization':
+        capabilities.push('summarization', 'text-processing');
+        break;
+      case 'translation':
+        capabilities.push('translation', 'multilingual');
+        break;
+      case 'fill-mask':
+        capabilities.push('text-completion', 'language-modeling');
+        break;
+    }
+
+    // Tag based capabilities
+    tags.forEach(tag => {
+      const tagLower = tag.toLowerCase();
+      if (tagLower.includes('multilingual')) capabilities.push('multilingual');
+      if (tagLower.includes('code')) capabilities.push('code-generation', 'programming');
+      if (tagLower.includes('instruct')) capabilities.push('instruction-following');
+      if (tagLower.includes('chat')) capabilities.push('conversation');
+      if (tagLower.includes('reasoning')) capabilities.push('reasoning');
+      if (tagLower.includes('math')) capabilities.push('mathematical-reasoning');
+      if (tagLower.includes('vision')) capabilities.push('vision', 'multimodal');
+    });
+
+    // Model name based capabilities
+    if (modelId.includes('gpt')) capabilities.push('text-generation', 'conversation');
+    if (modelId.includes('bert')) capabilities.push('embeddings', 'classification');
+    if (modelId.includes('t5')) capabilities.push('text-generation', 'translation');
+    if (modelId.includes('whisper')) capabilities.push('speech-to-text');
+    if (modelId.includes('stable-diffusion')) capabilities.push('image-generation');
+    if (modelId.includes('clip')) capabilities.push('vision', 'multimodal');
+
+    return [...new Set(capabilities)];
+  }
+}
+
 /* ------------------------------ Endpoint inference ------------------------------ */
 
 const ENDPOINTS = {
@@ -93,49 +350,50 @@ const ENDPOINTS = {
   VISION: '/v1/vision/analysis',
 };
 
-function inferEndpointFromMeta(meta = {}) {
-  const type = cleanString(meta.type).toLowerCase();
-  const caps = Array.isArray(meta.capabilities) ? meta.capabilities.map(c => cleanString(c).toLowerCase()) : [];
-  const tags = Array.isArray(meta.tags) ? meta.tags.map(t => cleanString(t).toLowerCase()) : [];
+function inferEndpointFromCapabilities(capabilities = []) {
+  const caps = new Set(capabilities.map(c => c.toLowerCase()));
 
-  const bag = new Set([type, ...caps, ...tags].filter(Boolean));
+  if (caps.has('embeddings') || caps.has('similarity')) return ENDPOINTS.EMBED;
+  if (caps.has('image-generation')) return ENDPOINTS.IMAGE;
+  if (caps.has('speech-to-text') || caps.has('transcription')) return ENDPOINTS.AUDIO_STT;
+  if (caps.has('text-to-speech') || caps.has('voice-synthesis')) return ENDPOINTS.AUDIO_TTS;
+  if (caps.has('vision') || caps.has('multimodal') || caps.has('image-understanding')) return ENDPOINTS.VISION;
+  if (caps.has('text-generation') || caps.has('conversation') || caps.has('chatbot')) return ENDPOINTS.CHAT;
 
-  if (bag.has('embedding') || bag.has('embeddings')) return ENDPOINTS.EMBED;
-  if (bag.has('image') || bag.has('images') || bag.has('generation') || bag.has('img2img')) return ENDPOINTS.IMAGE;
-  if (bag.has('transcription') || bag.has('stt') || bag.has('speech-to-text')) return ENDPOINTS.AUDIO_STT;
-  if (bag.has('tts') || bag.has('text-to-speech')) return ENDPOINTS.AUDIO_TTS;
-  if (bag.has('vision') || bag.has('multimodal') || bag.has('image-understanding')) return ENDPOINTS.VISION;
-  if (bag.has('chat') || bag.has('text') || bag.has('completion') || bag.has('llm')) return ENDPOINTS.CHAT;
-
-  return null;
+  return ENDPOINTS.CHAT; // Default
 }
 
 function inferEndpointFromName(modelName = '') {
   const n = cleanString(modelName).toLowerCase();
 
   // Embeddings
-  if (/\b(embed|embedding|vector)\b/.test(n)) return ENDPOINTS.EMBED;
+  if (/\b(embed|embedding|vector|bert|sentence)/.test(n)) return ENDPOINTS.EMBED;
 
   // Image generation
-  if (/\b(image|images|img|dalle|sd|stable|diffusion|flux|sdxl)\b/.test(n)) return ENDPOINTS.IMAGE;
+  if (/\b(image|images|img|dalle|sd|stable|diffusion|flux|sdxl)/.test(n)) return ENDPOINTS.IMAGE;
 
   // Audio STT
-  if (/\b(whisper|transcribe|speech2text|speech-to-text|asr)\b/.test(n)) return ENDPOINTS.AUDIO_STT;
+  if (/\b(whisper|transcribe|speech2text|speech-to-text|asr)/.test(n)) return ENDPOINTS.AUDIO_STT;
 
   // Audio TTS
-  if (/\b(tts|text2speech|text-to-speech|voice)\b/.test(n)) return ENDPOINTS.AUDIO_TTS;
+  if (/\b(tts|text2speech|text-to-speech|voice)/.test(n)) return ENDPOINTS.AUDIO_TTS;
 
   // Vision / multimodal
-  if (/\b(vision|clip|blip|ocr|multimodal|vlm)\b/.test(n)) return ENDPOINTS.VISION;
+  if (/\b(vision|clip|blip|ocr|multimodal|vlm)/.test(n)) return ENDPOINTS.VISION;
 
   // Default to chat
   return ENDPOINTS.CHAT;
 }
 
-function chooseEndpoint({ forceEndpoint, modelName, meta }) {
+function chooseEndpoint({ forceEndpoint, modelName, capabilities, meta }) {
   if (forceEndpoint && ENDPOINTS_MAP[forceEndpoint]) return ENDPOINTS_MAP[forceEndpoint];
-  const fromMeta = inferEndpointFromMeta(meta);
-  if (fromMeta) return fromMeta;
+  
+  // Try capabilities first
+  if (capabilities && capabilities.length > 0) {
+    const fromCapabilities = inferEndpointFromCapabilities(capabilities);
+    if (fromCapabilities) return fromCapabilities;
+  }
+  
   return inferEndpointFromName(modelName);
 }
 
@@ -159,13 +417,18 @@ const ENDPOINTS_MAP = {
 
 async function httpGet(url, headers = {}, timeout = TIMEOUT_MS, retries = RETRIES) {
   let lastErr;
-  const maxDelay = 30000; // Maximum 30 seconds between retries
-  const baseDelay = 1000; // Start with 1 second
+  const maxDelay = 30000;
+  const baseDelay = 1000;
   
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const res = await axios.get(url, { headers, timeout });
-      return res.data;
+      const response = await fetch(url, { headers, timeout });
+      
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
+      return await response.json();
     } catch (err) {
       lastErr = err;
       const status = err?.response?.status;
@@ -176,9 +439,8 @@ async function httpGet(url, headers = {}, timeout = TIMEOUT_MS, retries = RETRIE
                          err.code === 'ENOTFOUND' ||
                          err.code === 'ECONNREFUSED';
       
-      // Exponential backoff with jitter
       const delayMs = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
-      const jitter = Math.random() * 1000; // Add up to 1 second of randomness
+      const jitter = Math.random() * 1000;
       const totalDelay = delayMs + jitter;
       
       log('warn', `GET ${url} failed (attempt ${attempt + 1}/${retries + 1})`,
@@ -193,7 +455,6 @@ async function httpGet(url, headers = {}, timeout = TIMEOUT_MS, retries = RETRIE
     }
   }
   
-  // Provide detailed error message for debugging
   log('error', `Final failure for ${url} after ${retries + 1} attempts:`,
       lastErr?.response?.status ? `HTTP ${lastErr.response.status}` : lastErr?.code || 'Unknown error',
       lastErr?.message || 'No error message available');
@@ -235,12 +496,14 @@ const limit = pLimit(CONCURRENCY);
 
 /* ------------------------------ Model extraction ------------------------------ */
 
-function extractModelsFromResponse(data) {
-  // Support a variety of shapes:
-  // - Array of strings: ["gpt-4", "gpt-3.5-turbo"]
-  // - Array of objects: [{id, name, model, type, capabilities, tags}, ...]
-  // - Object with .models or .data fields containing arrays
+function extractModelsFromResponse(data, isHuggingFace = false) {
   const candidates = [];
+
+  if (isHuggingFace) {
+    // Use HuggingFace API parser
+    const hfAPI = new HuggingFaceAPI();
+    return hfAPI.parseModelSearchResults(Array.isArray(data) ? data : [data]);
+  }
 
   function collect(arr) {
     for (const item of arr) {
@@ -272,6 +535,7 @@ function extractModelsFromResponse(data) {
   return candidates
     .map(m => ({
       id: normalizeModelId(m.id),
+      capabilities: m.capabilities || [],
       meta: { type: m.type, capabilities: m.capabilities, tags: m.tags, raw: m.raw },
     }))
     .filter(m => !!m.id);
@@ -300,25 +564,49 @@ function getCol(row, keys, fallback = '') {
 async function resolveModelsForRow(row) {
   const modelField = cleanString(getCol(row, ['Model(s)', 'Models', 'Model', 'model', 'models']));
   const apiKey = cleanString(getCol(row, ['APIKey', 'ApiKey', 'api_key', 'apiKey']));
-  const authHeader = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-
+  const providerName = cleanString(getCol(row, ['Name', 'Provider', 'provider_name', 'ProviderName']));
+  
   if (!modelField) {
     log('warn', 'No Model(s) field provided');
     return [];
   }
 
-  // Force URL-based model resolution only
+  // Check if it's a HuggingFace URL
+  const isHuggingFaceURL = modelField.includes('huggingface.co/api/models');
+  
   if (!isURL(modelField)) {
     log('error', `Model(s) field must contain a valid URL, got: ${modelField}`);
     return [];
   }
 
   try {
+    const authHeader = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
     const data = await httpGet(modelField, authHeader);
-    const models = extractModelsFromResponse(data);
+    
+    const models = extractModelsFromResponse(data, isHuggingFaceURL);
+    
+    // If it's HuggingFace and we have an API key, enhance with detailed capabilities
+    if (isHuggingFaceURL && HF_API_KEY) {
+      const hfAPI = new HuggingFaceAPI(HF_API_KEY);
+      
+      // Enhance models with detailed capabilities
+      for (const model of models) {
+        try {
+          const details = await hfAPI.getModelDetails(model.id);
+          if (details) {
+            model.capabilities = details.capabilities;
+            model.meta = { ...model.meta, ...details.provider_data };
+          }
+        } catch (error) {
+          log('debug', `Could not enhance model ${model.id}:`, error.message);
+        }
+      }
+    }
+    
     if (models.length === 0) {
       log('warn', `Model endpoint returned no models: ${modelField}`);
     }
+    
     return models;
   } catch (e) {
     log('error', `Failed to fetch models from ${modelField}:`, e?.message || e);
@@ -343,6 +631,12 @@ async function generateProvidersJSON(csvPath, outputPath) {
   let processedCount = 0;
   let errorCount = 0;
 
+  // Initialize HuggingFace API if key is available
+  const hfAPI = HF_API_KEY ? new HuggingFaceAPI(HF_API_KEY) : null;
+  if (hfAPI) {
+    log('info', 'HuggingFace API integration enabled');
+  }
+
   // Process each row with concurrency
   await Promise.all(rows.map((row, idx) => limit(async () => {
     try {
@@ -351,7 +645,8 @@ async function generateProvidersJSON(csvPath, outputPath) {
       const baseURL = cleanString(getCol(row, ['Base_URL', 'BaseURL', 'Base Url', 'base_url']));
       const apiKey = cleanString(getCol(row, ['APIKey', 'ApiKey', 'api_key', 'apiKey']));
       const modelField = cleanString(getCol(row, ['Model(s)', 'Models', 'Model', 'model', 'models']));
-      const other = cleanString(getCol(row, ['Other', 'other', 'metadata', 'info']));
+      const priority = parseNumber(getCol(row, ['Priority', 'priority']), 99);
+      const tokenMultiplier = parseNumber(getCol(row, ['TokenMultiplier', 'token_multiplier']), 1.0);
       const forceEndpoint = cleanString(getCol(row, ['ForceEndpoint', 'Endpoint', 'endpoint', 'type']));
 
       // Required field validation
@@ -403,15 +698,19 @@ async function generateProvidersJSON(csvPath, outputPath) {
         const endpoint = chooseEndpoint({
           forceEndpoint: forceEndpoint ? ENDPOINTS_MAP[forceEndpoint] || forceEndpoint : '',
           modelName: modelId,
+          capabilities: entry.capabilities,
           meta: entry.meta || {},
         });
 
         const providerConfig = {
           provider_name: providerName,
           base_url: baseURL,
-          api_key: apiKey || null, // Explicitly set to null if empty
+          api_key: apiKey || null,
           model: modelId,
-          other: other || null, // Preserve "Other" column data as metadata
+          priority: priority,
+          token_multiplier: tokenMultiplier,
+          capabilities: entry.capabilities || [],
+          metadata: entry.meta || {}
         };
 
         addModel(results, endpoint, modelId, providerConfig);
@@ -475,6 +774,18 @@ function watchCSV(csvPath, onChange) {
 
 async function main() {
   try {
+    // Wait for fetch to be available
+    let attempts = 0;
+    while (!fetch && attempts < 10) {
+      await delay(100);
+      attempts++;
+    }
+    
+    if (!fetch) {
+      const nodeFetch = await import('node-fetch');
+      fetch = nodeFetch.default;
+    }
+    
     await generateProvidersJSON(CSV_PATH, OUTPUT_PATH);
   } catch (e) {
     log('error', 'Failed to generate providers.json:', e?.message || e);
@@ -499,6 +810,7 @@ if (require.main === module) {
 module.exports = {
   generateProvidersJSON,
   inferEndpointFromName,
-  inferEndpointFromMeta,
+  inferEndpointFromCapabilities,
   chooseEndpoint,
+  HuggingFaceAPI
 };

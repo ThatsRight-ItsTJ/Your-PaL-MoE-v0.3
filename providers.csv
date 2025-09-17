@@ -1,0 +1,16 @@
+Name,Base_URL,APIKey,Model(s),list,endpoint,Rate,Limit/cost,info,,,,,,
+NoAuth_Pollinations_Text,https://text.pollinations.ai/,,https://text.pollinations.ai/models,Free,to,use,with,a,10,requests,per,minute,rate,limit
+NoAuth_Pollinations_Image,https://image.pollinations.ai/prompt/,,https://image.pollinations.ai/models,Free,to,use,with,a,10,requests,per,minute,rate,limit
+OpenRouter,https://openrouter.ai/api/v1/chat/completions,key_example,https://openrouter.ai/api/frontend/models?max_price=0,up,to,20,requests,per,minute.,50,per,day,,
+ImageRouter,https://api.imagerouter.io/v1/openai/images/generations,key_example,google/gemini-2.5-flash:free|black-forest-labs/FLUX-1-schnell:free|HiDream-ai/HiDream-I1-Full:free|lodestones/Chroma:free,Image,generation:,6,requests,/,second,,,,,
+Pollinations_Text,https://text.pollinations.ai/,key_example,https://text.pollinations.ai/models,Free,to,use,with,a,10,requests,per,minute,rate,limit
+Pollinations_Image,https://image.pollinations.ai/prompt/,key_example,https://image.pollinations.ai/models,Free,to,use,with,a,10,requests,per,minute,rate,limit
+Zuki_Journey,https://api.zukijourney.com/v1,key_example,https://api.zukijourney.com/v1/models,Only,cache,&,use,models,with,a,Price,Multiplier,of,0.001
+HelixMind,https://helixmind.online/v1,key_example,gpt-4o-mini|gpt-4o|deepseek-v3-0324|shivaay|gpt-4.1-nano|llama-4-scout|gemini-2.0-flash|FLUX.1-schnell|dall-e-3,"""100 API requests/day with 1 request per 30 seconds""",,,,,,,,,,
+VoidAI,https://api.voidai.app/v1,key_example,https://api.voidai.app/v1/models,125000,daily,credits,,,,,,,,
+MNNAI,https://api.mnnai.ru/v1/,key_example,https://api.mnnai.ru/v1/models,"has models costing 0.01 aka ""free""",,,,,,,,,,
+Z.ai,https://api.z.ai/api/paas/v4/,key_example,GLM-4.5-Flash,Concurrency,limit,of,2,,,,,,,
+Bigmodel.cn,https://open.bigmodel.cn/api/paas/v4/,key_example,glm-z1-flash|glm-4-flash-250414|glm-realtime-flash|glm-realtime|glm-realtime-air|glm-4-32b-0414-128k|glm-4.1v-thinking-flash|glm-4-flash|glm-4v-flash|cogview-3-flash|cogvideox-flash|glm-experimental-preview,Concurrency,limit,of,2,,,,,,,
+ElectronHub,https://api.electronhub.ai,key_example,https://api.electronhub.ai/models,7,requests,per,minute,,,,,,,
+NavyAI,https://api.navy/v1/,key_example,https://api.navy/v1/models,800000,tokens,free,per,day,,,,,,
+Gihub_Models,https://models.github.ai,key_example,https://models.github.ai/catalog/models,,,,,,,,,,,
