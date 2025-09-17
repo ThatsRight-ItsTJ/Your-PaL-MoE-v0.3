@@ -1,16 +1,16 @@
 # 🚀 Your PaL MoE  
-**MCP Server for Multi-Provider AI Access with Named Tools**
+**API Server for Multi-Provider AI Access with Named Tools**
 
-Your PaL MoE is an MCP (Model Context Protocol) server that provides access to multiple AI providers through Named Tools. It lets you define AI providers in a **simple CSV file** and automatically generates an **OpenAI-compatible `providers.json`** where each model becomes a callable Named Tool.
+Your PaL MoE is an API Porxy Aggregator that provides access to multiple AI providers through Named Tools. It lets you define AI providers in a **simple CSV file** and automatically generates an **OpenAI-compatible `providers.json`** where each model becomes a callable Named Tool.
 
-The system features **direct model access**, **provider management**, and a **pluggable parser system** — making it easy to access multiple AI providers through standardized MCP tools while maintaining compatibility with various model formats.
+The system features **direct model access**, **provider management**, and a **pluggable parser system** — making it easy to access multiple AI providers through standardized API tools while maintaining compatibility with various model formats.
 
 ---
 
 ## ✨ Features
 
 - **🛠️ Named Tool Integration**  
-  Each model becomes a directly callable Named Tool through the MCP protocol.
+  Each model becomes directly callable through the API protocol.
 
 - **⚡ Multi-Provider Support**  
   Access models from OpenAI, Anthropic, HuggingFace, and other providers through unified tools.
@@ -27,8 +27,8 @@ The system features **direct model access**, **provider management**, and a **pl
 - **🔌 Pluggable Parser System**  
   Extensible parsing framework for different model providers (OpenAI, Anthropic, HuggingFace, etc.).
 
-- **📊 MCP Protocol Compliance**  
-  Full MCP server implementation with proper tool registration and execution.
+- **📊 API Protocol Compliance**  
+  Full API server implementation with proper tool registration and execution.
 
 - **📄 CSV-Driven Configuration**  
   Add or update providers in a spreadsheet-friendly CSV format.
@@ -38,7 +38,7 @@ The system features **direct model access**, **provider management**, and a **pl
 ## 🗏️ Architecture
 
 ### Core Architecture Pattern
-Your PaL MoE implements an **MCP Server with Named Tool Registration**. Each model from the configured providers becomes a directly callable Named Tool, allowing MCP clients to access any model through standardized tool calls.
+Your PaL MoE implements an **API Server with Named Tool Registration**. Each model from the configured providers becomes a directly callable Named Tool, allowing API clients to access any model through standardized tool calls.
 
 ### Key Architectural Layers
 
@@ -46,8 +46,8 @@ Your PaL MoE implements an **MCP Server with Named Tool Registration**. Each mod
    - Manages provider configurations and model specifications
    - Handles model-to-tool mapping and registration
 
-2. **MCP Server Layer** ([`taskmaster.js`](taskmaster.js))
-   - Implements MCP protocol for tool registration and execution
+2. **API Server Layer** ([`taskmaster.js`](taskmaster.js))
+   - Implements API protocol for tool registration and execution
    - Handles tool discovery and method routing
 
 3. **Tool Execution Layer** ([`modeHandlers.js`](modeHandlers.js))
@@ -60,16 +60,16 @@ Your PaL MoE implements an **MCP Server with Named Tool Registration**. Each mod
 
 ### Workflow Example
 
-1. **MCP Client Connection**: Client connects to Your PaL MoE MCP server
+1. **API Client Connection**: Client connects to Your PaL MoE API server
 2. **Tool Discovery**: Client discovers available Named Tools (one per model)
 3. **Tool Execution**: Client calls specific model tool (e.g., "gpt-4-turbo", "claude-3-sonnet")
 4. **Request Processing**: Server routes request to appropriate provider
-5. **Response Return**: Formatted response returned through MCP protocol
+5. **Response Return**: Formatted response returned through API protocol
 
 ### Key Strengths
 
 - **Direct Access**: Each model accessible as individual Named Tool
-- **MCP Compliance**: Full MCP protocol implementation
+- **API Compliance**: Full API protocol implementation
 - **Multi-Provider**: Support for various AI providers in single server
 - **Flexibility**: Multiple execution modes for collaboration scenarios
 - **Simplicity**: Easy provider management through CSV configuration
@@ -83,7 +83,7 @@ Your PaL MoE/
 ├── providers.csv              # Your provider definitions
 ├── providers.json             # Auto-generated for the router
 ├── csv-to-providers.js        # CSV → JSON generator module
-├── index.js                   # MCP server implementation
+├── index.js                   # API server implementation
 ├── rolesConfig.js            # Provider and model configuration
 ├── taskmaster.js             # Tool registration and execution
 ├── modeHandlers.js           # Collaboration mode implementations (optional)
@@ -102,7 +102,7 @@ Your PaL MoE/
 
 ## 💥 Named Tools
 
-Each model configured in your `providers.csv` becomes a Named Tool that MCP clients can call directly:
+Each model configured in your `providers.csv` becomes a Named Tool that API clients can call directly:
 
 ### Example Available Tools
 
@@ -115,8 +115,8 @@ Each model configured in your `providers.csv` becomes a Named Tool that MCP clie
 ### Tool Call Example
 
 ```javascript
-// MCP client calling specific model tool
-const response = await mcpClient.callTool({
+// API client calling specific model tool
+const response = await APIClient.callTool({
   name: "gpt-4-turbo",
   arguments: {
     messages: [
@@ -146,13 +146,13 @@ const response = await mcpClient.callTool({
 ## ⚙️ How It Works
 
 1. **Server Startup**  
-   MCP server reads provider configuration and registers each model as a Named Tool.
+   API server reads provider configuration and registers each model as a Named Tool.
 
 2. **Tool Registration**  
-   Each model becomes discoverable and callable through the MCP protocol.
+   Each model becomes discoverable and callable through the API protocol.
 
 3. **Client Connection**  
-   MCP clients connect and discover available model tools.
+   API clients connect and discover available model tools.
 
 4. **Tool Execution**  
    Clients call specific model tools with request parameters.
@@ -177,16 +177,16 @@ npm install
 ### 2. Configure Providers
 Edit [`providers.csv`](providers.csv) with your provider details and model specifications.
 
-### 3. Run the MCP Server
+### 3. Run the API Server
 ```bash
 npm start
 ```
 
-### 4. Connect MCP Client
+### 4. Connect API Client
 ```javascript
-import { MCPClient } from "@mcp/client";
+import { APIClient } from "@API/client";
 
-const client = new MCPClient({
+const client = new APIClient({
   serverUrl: "http://localhost:3000"
 });
 
@@ -239,12 +239,12 @@ const multiResponse = await client.callTool({
 
 ## 🧠 Roadmap
 
-- [ ] Enhanced MCP protocol feature support
+- [ ] Enhanced API protocol feature support
 - [ ] Dynamic model discovery and registration
 - [ ] Real-time provider health monitoring
 - [ ] Advanced collaboration modes for multi-model workflows
 - [ ] Provider-specific parameter optimization
-- [ ] MCP client libraries and documentation
+- [ ] API client libraries and documentation
 
 ---
 
@@ -254,7 +254,7 @@ MIT License — see [LICENSE](LICENSE) for details.
 ---
 
 ## 🙌 Acknowledgements
-- [Model Context Protocol (MCP)](https://modelcontextprotocol.org/) for the protocol specification
+- [Model Context Protocol (API)](https://modelcontextprotocol.org/) for the protocol specification
 - [Exoml Router](https://github.com/exomlapi/exomlapi) for the original routing framework
 - All AI providers integrated via Your PaL MoE
 - The open-source AI community for inspiration and contributions
