@@ -46,7 +46,7 @@ const validators = {
     
     sanitizeString: (str) => {
         if (typeof str !== 'string') return '';
-        return str.replace(/[<>'"&]/g, '').trim();
+        return str.replace(/[<>&]/g, '').trim();
     },
     
     validateProvider: (provider) => {

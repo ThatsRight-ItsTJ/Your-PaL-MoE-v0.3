@@ -1,0 +1,8 @@
+Name,Base_URL,APIKey,Model(s),Priority,TokenMultiplier,Rate Limit/Cost Info
+OpenAI-Primary,https://api.openai.com/v1,sk-test-openai-key-123456,gpt-4|gpt-3.5-turbo,1,1.0,free
+OpenAI-Secondary,https://api.openai.com/v1,sk-test-openai-key-abcdef,claude-3,2,1.2,daily 1000, $0.002 per token
+HuggingFace,https://huggingface.co/api/models,,bert-base|roberta,5,0.8,price multiplier of 0.001
+Anthropic,https://api.anthropic.com,vic-test-anthropic-key-789012,claude-instant,3,1.5,per minute 50 requests
+InvalidProvider,not-a-valid-url,sk-test-key-xyz,gpt-4,1,1.0,invalid config
+EmptyKey,https://api.openai.com/v1,,gpt-4,1,1.0,no key provided
+SpecialChars,https://api.example.com,sk-test-key-with-chars!@#,gpt-4,1,1.0,special chars
