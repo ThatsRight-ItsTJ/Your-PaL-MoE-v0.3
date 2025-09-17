@@ -27,8 +27,8 @@ The system features **direct model access**, **provider management**, and a **pl
 - **🔌 Pluggable Parser System**  
   Extensible parsing framework for different model providers (OpenAI, Anthropic, HuggingFace, etc.).
 
-- **📊 API Protocol Compliance**  
-  Full API server implementation with proper tool registration and execution.
+- **📊 OpenAI Protocol Compliance**  
+  Full API server implementation with OpenAI Compatible endpoints.
 
 - **📄 CSV-Driven Configuration**  
   Add or update providers in a spreadsheet-friendly CSV format.
