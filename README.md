@@ -1,7 +1,7 @@
 # 🚀 Your PaL MoE  
 **API Server for Multi-Provider AI Access with Named Tools**
 
-Your PaL MoE is an API Porxy Aggregator that provides access to multiple AI providers through Named Tools. It lets you define AI providers in a **simple CSV file** and automatically generates an **OpenAI-compatible `providers.json`** where each model becomes a callable Named Tool.
+Your PaL MoE is an API Porxy Aggregator that provides access to multiple AI providers through Named Tools. It lets you define AI providers in a **simple CSV file** and automatically generates an **OpenAI-compatible `providers.json`**.
 
 The system features **direct model access**, **provider management**, and a **pluggable parser system** — making it easy to access multiple AI providers through standardized API tools while maintaining compatibility with various model formats.
 
