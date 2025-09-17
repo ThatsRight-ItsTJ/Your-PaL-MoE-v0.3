@@ -1,0 +1,56 @@
+{
+    "endpoints": {
+        "/v1/chat/completions": {
+            "models": {
+                "gpt-3.5-turbo": [
+                    {
+                        "provider_name": "OpenAI-Primary",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "YOUR_OPENAI_API_KEY_HERE",
+                        "model": "gpt-3.5-turbo",
+                        "priority": 1,
+                        "token_multiplier": 1.0
+                    }
+                ],
+                "gpt-4": [
+                    {
+                        "provider_name": "OpenAI-GPT4",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "YOUR_OPENAI_API_KEY_HERE",
+                        "model": "gpt-4",
+                        "priority": 1,
+                        "token_multiplier": 1.0
+                    }
+                ]
+            }
+        },
+        "/v1/embeddings": {
+            "models": {
+                "text-embedding-ada-002": [
+                    {
+                        "provider_name": "OpenAI-Embeddings",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "YOUR_OPENAI_API_KEY_HERE",
+                        "model": "text-embedding-ada-002",
+                        "priority": 1,
+                        "token_multiplier": 1.0
+                    }
+                ]
+            }
+        },
+        "/v1/images/generations": {
+            "models": {
+                "dall-e-3": [
+                    {
+                        "provider_name": "OpenAI-DALL-E",
+                        "base_url": "https://api.openai.com/v1",
+                        "api_key": "YOUR_OPENAI_API_KEY_HERE",
+                        "model": "dall-e-3",
+                        "priority": 1,
+                        "token_multiplier": 1.0
+                    }
+                ]
+            }
+        }
+    }
+}
