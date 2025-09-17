@@ -1,4 +1,10 @@
+# Dependencies
+/node_modules
+node_modules/
+
+# Provider files
 providers.csv
 providers.json
+
+# Environment files
 .env
-node_modules/*
