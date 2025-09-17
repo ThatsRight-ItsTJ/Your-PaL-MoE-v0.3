@@ -95,6 +95,42 @@ function normalizeModelId(raw) {
   return m;
 }
 
+/**
+ * Infer capabilities from model name alone
+ */
+function inferCapabilitiesFromModelName(modelName = '') {
+  const capabilities = [];
+  const nameLower = modelName.toLowerCase();
+  
+  // Check for specific model patterns
+  if (nameLower.includes('gpt') || nameLower.includes('claude') || nameLower.includes('llama')) {
+    capabilities.push('text-generation', 'conversation');
+  }
+  
+  if (nameLower.includes('embedding') || nameLower.includes('bert') || nameLower.includes('text-embedding')) {
+    capabilities.push('embeddings', 'similarity');
+  }
+  
+  if (nameLower.includes('dalle') || nameLower.includes('image') || nameLower.includes('stable-diffusion') || nameLower.includes('flux')) {
+    capabilities.push('image-generation');
+  }
+  
+  if (nameLower.includes('whisper') || nameLower.includes('speech') || nameLower.includes('audio')) {
+    capabilities.push('speech-to-text', 'transcription');
+  }
+  
+  if (nameLower.includes('vision') || nameLower.includes('clip') || nameLower.includes('multimodal')) {
+    capabilities.push('vision', 'image-understanding');
+  }
+  
+  // Default to text generation for unknown models
+  if (capabilities.length === 0) {
+    capabilities.push('text-generation');
+  }
+  
+  return capabilities;
+}
+
 /* ------------------------------ HuggingFace API Integration ------------------------------ */
 
 class HuggingFaceAPI {
@@ -574,42 +610,87 @@ async function resolveModelsForRow(row) {
   // Check if it's a HuggingFace URL
   const isHuggingFaceURL = modelField.includes('huggingface.co/api/models');
   
-  if (!isURL(modelField)) {
-    log('error', `Model(s) field must contain a valid URL, got: ${modelField}`);
+  // Check if it's a delimited list (pipe or comma separated)
+  const isDelimitedList = modelField.includes('|') || modelField.includes(',');
+  
+  // Check if it's a single model name
+  const isModelName = cleanString(modelField).length > 0 && !isURL(modelField) && !isDelimitedList;
+  
+  log('debug', `Processing model field: "${modelField}" (isURL: ${isURL(modelField)}, isDelimitedList: ${isDelimitedList}, isModelName: ${isModelName}, isHuggingFaceURL: ${isHuggingFaceURL})`);
+  
+  if (!isURL(modelField) && !isDelimitedList && !isModelName) {
+    log('error', `Model(s) field must contain a valid URL, delimited list, or model name, got: ${modelField}`);
     return [];
   }
 
   try {
-    const authHeader = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-    const data = await httpGet(modelField, authHeader);
+    let models = [];
     
-    const models = extractModelsFromResponse(data, isHuggingFaceURL);
-    
-    // If it's HuggingFace and we have an API key, enhance with detailed capabilities
-    if (isHuggingFaceURL && HF_API_KEY) {
-      const hfAPI = new HuggingFaceAPI(HF_API_KEY);
+    // Handle different input types
+    if (isDelimitedList) {
+      // Process delimited list (pipe or comma separated)
+      const delimiter = modelField.includes('|') ? '|' : ',';
+      const modelNames = modelField.split(delimiter).map(name => cleanString(name)).filter(name => name);
       
-      // Enhance models with detailed capabilities
-      for (const model of models) {
-        try {
-          const details = await hfAPI.getModelDetails(model.id);
-          if (details) {
-            model.capabilities = details.capabilities;
-            model.meta = { ...model.meta, ...details.provider_data };
+      log('debug', `Processing ${modelNames.length} models from delimited list:`, modelNames);
+      
+      // Create model entries from names
+      models = modelNames.map(name => ({
+        id: normalizeModelId(name),
+        capabilities: inferCapabilitiesFromModelName(name),
+        meta: { type: 'delimited-list', original: name }
+      }));
+      
+    } else if (isModelName) {
+      // Handle single model name
+      log('debug', `Processing single model name: ${modelField}`);
+      
+      models = [{
+        id: normalizeModelId(modelField),
+        capabilities: inferCapabilitiesFromModelName(modelField),
+        meta: { type: 'single-model', original: modelField }
+      }];
+      
+    } else if (isHuggingFaceURL) {
+      // Fetch from HuggingFace API
+      const authHeader = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+      const data = await httpGet(modelField, authHeader);
+      
+      models = extractModelsFromResponse(data, true);
+      
+      // If we have an API key, enhance with detailed capabilities
+      if (HF_API_KEY) {
+        const hfAPI = new HuggingFaceAPI(HF_API_KEY);
+        
+        // Enhance models with detailed capabilities
+        for (const model of models) {
+          try {
+            const details = await hfAPI.getModelDetails(model.id);
+            if (details) {
+              model.capabilities = details.capabilities;
+              model.meta = { ...model.meta, ...details.provider_data };
+            }
+          } catch (error) {
+            log('debug', `Could not enhance model ${model.id}:`, error.message);
           }
-        } catch (error) {
-          log('debug', `Could not enhance model ${model.id}:`, error.message);
         }
       }
+      
+    } else if (isURL(modelField)) {
+      // Fetch from other API endpoints
+      const authHeader = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+      const data = await httpGet(modelField, authHeader);
+      
+      models = extractModelsFromResponse(data, false);
     }
     
     if (models.length === 0) {
-      log('warn', `Model endpoint returned no models: ${modelField}`);
+      log('warn', `No models resolved from: ${modelField}`);
     }
     
     return models;
   } catch (e) {
-    log('error', `Failed to fetch models from ${modelField}:`, e?.message || e);
+    log('error', `Failed to process models from ${modelField}:`, e?.message || e);
     return [];
   }
 }
@@ -627,6 +708,23 @@ function addModel(results, endpoint, model, providerConfig) {
 async function generateProvidersJSON(csvPath, outputPath) {
   log('info', `Reading CSV: ${csvPath}`);
   const rows = await readCSV(csvPath);
+  
+  // Filter out empty rows (all fields empty or just empty strings)
+  const validRows = rows.filter((row, idx) => {
+    const hasData = Object.values(row).some(value =>
+      value != null && value.toString().trim() !== ''
+    );
+    
+    if (!hasData) {
+      log('debug', `Skipping empty row ${idx + 1}`);
+      return false;
+    }
+    
+    return true;
+  });
+  
+  log('info', `Found ${validRows.length} valid rows out of ${rows.length} total rows`);
+  
   const results = initResults();
   let processedCount = 0;
   let errorCount = 0;
@@ -638,7 +736,7 @@ async function generateProvidersJSON(csvPath, outputPath) {
   }
 
   // Process each row with concurrency
-  await Promise.all(rows.map((row, idx) => limit(async () => {
+  await Promise.all(validRows.map((row, idx) => limit(async () => {
     try {
       // Extract and validate required fields
       const providerName = cleanString(getCol(row, ['Name', 'Provider', 'provider_name', 'ProviderName'], `Provider_${idx + 1}`));
@@ -668,15 +766,20 @@ async function generateProvidersJSON(csvPath, outputPath) {
         return;
       }
 
-      // URL validation
+      // URL validation for base URL (must be a URL)
       if (!isURL(baseURL)) {
         log('error', `Row ${idx + 1}: Provider "${providerName}" - invalid Base_URL format: ${baseURL}`);
         errorCount++;
         return;
       }
 
-      if (!isURL(modelField)) {
-        log('error', `Row ${idx + 1}: Provider "${providerName}" - invalid Model(s) URL format: ${modelField}`);
+      // Model field validation - can be URL, delimited list, or single model name
+      const isHuggingFaceURL = modelField.includes('huggingface.co/api/models');
+      const isDelimitedList = modelField.includes('|') || modelField.includes(',');
+      const isModelName = cleanString(modelField).length > 0 && !isURL(modelField) && !isDelimitedList;
+      
+      if (!isURL(modelField) && !isDelimitedList && !isModelName) {
+        log('error', `Row ${idx + 1}: Provider "${providerName}" - invalid Model(s) format: ${modelField} (must be URL, delimited list, or model name)`);
         errorCount++;
         return;
       }
