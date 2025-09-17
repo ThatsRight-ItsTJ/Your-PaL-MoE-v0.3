@@ -1,0 +1,16 @@
+{
+  "server": {
+    "port": 3000,
+    "host": "localhost"
+  },
+  "logging": {
+    "level": "debug",
+    "console": true
+  },
+  "security": {
+    "rateLimiting": {
+      "windowMs": 60000,
+      "maxRequests": 1000
+    }
+  }
+}

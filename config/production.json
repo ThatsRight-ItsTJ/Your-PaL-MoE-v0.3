@@ -1,0 +1,21 @@
+{
+  "server": {
+    "port": 8080,
+    "host": "0.0.0.0"
+  },
+  "logging": {
+    "level": "info",
+    "console": false,
+    "file": "./logs/production.log"
+  },
+  "security": {
+    "rateLimiting": {
+      "windowMs": 60000,
+      "maxRequests": 100
+    }
+  },
+  "performance": {
+    "requestTimeout": 15000,
+    "maxConcurrentRequests": 20
+  }
+}
