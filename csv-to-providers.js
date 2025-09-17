@@ -17,6 +17,7 @@
  *   HF_API_KEY=your_huggingface_api_key
  */
 
+require('dotenv').config();
 const fs = require('fs');
 const path = require('path');
 const csvParser = require('csv-parser');
@@ -93,6 +94,51 @@ function normalizeModelId(raw) {
   }
 
   return m;
+}
+
+/**
+ * Search HuggingFace by model name to get detailed capabilities
+ */
+async function searchHuggingFaceByModelName(modelName) {
+  if (!HF_API_KEY) {
+    log('debug', `No HF_API_KEY, using pattern matching for: ${modelName}`);
+    return inferCapabilitiesFromModelName(modelName);
+  }
+  
+  log('debug', `Searching HuggingFace for model: ${modelName}`);
+  const hfAPI = new HuggingFaceAPI(HF_API_KEY);
+  
+  try {
+    // Search for the model on HuggingFace
+    const results = await hfAPI.searchModels(modelName, { limit: 1 });
+    
+    if (results.length > 0) {
+      const model = results[0];
+      log('debug', `Found HuggingFace model: ${model.id} with score: ${model.score || 'N/A'}`);
+      
+      // Get detailed capabilities
+      const details = await hfAPI.getModelDetails(model.id);
+      
+      return {
+        id: model.id,
+        capabilities: details?.capabilities || inferCapabilitiesFromModelName(modelName),
+        meta: {
+          type: 'huggingface-search',
+          confidence: model.score || 0.8,
+          original: modelName,
+          huggingface_data: details
+        }
+      };
+    } else {
+      log('debug', `No HuggingFace models found for: ${modelName}`);
+    }
+  } catch (error) {
+    log('debug', `HuggingFace search failed for ${modelName}:`, error.message);
+  }
+  
+  // Fallback to pattern matching
+  log('debug', `Using pattern matching fallback for: ${modelName}`);
+  return inferCapabilitiesFromModelName(modelName);
 }
 
 /**
@@ -634,21 +680,46 @@ async function resolveModelsForRow(row) {
       
       log('debug', `Processing ${modelNames.length} models from delimited list:`, modelNames);
       
-      // Create model entries from names
-      models = modelNames.map(name => ({
-        id: normalizeModelId(name),
-        capabilities: inferCapabilitiesFromModelName(name),
-        meta: { type: 'delimited-list', original: name }
-      }));
+      // Create model entries from names with HuggingFace search
+      models = [];
+      for (const name of modelNames) {
+        try {
+          const searchResult = await searchHuggingFaceByModelName(name);
+          models.push({
+            id: normalizeModelId(name),
+            capabilities: searchResult.capabilities,
+            meta: {
+              type: 'delimited-list',
+              original: name,
+              ...(searchResult.meta || {})
+            }
+          });
+        } catch (error) {
+          log('warn', `Failed to process model ${name} from delimited list:`, error.message);
+          // Add fallback model entry
+          models.push({
+            id: normalizeModelId(name),
+            capabilities: inferCapabilitiesFromModelName(name),
+            meta: { type: 'delimited-list', original: name, error: error.message }
+          });
+        }
+      }
       
     } else if (isModelName) {
       // Handle single model name
       log('debug', `Processing single model name: ${modelField}`);
       
+      // Try to search HuggingFace first, fallback to pattern matching
+      const searchResult = await searchHuggingFaceByModelName(modelField);
+      
       models = [{
         id: normalizeModelId(modelField),
-        capabilities: inferCapabilitiesFromModelName(modelField),
-        meta: { type: 'single-model', original: modelField }
+        capabilities: searchResult.capabilities,
+        meta: {
+          type: 'single-model',
+          original: modelField,
+          ...(searchResult.meta || {})
+        }
       }];
       
     } else if (isHuggingFaceURL) {

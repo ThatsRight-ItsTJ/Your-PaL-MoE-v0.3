@@ -1,2 +1,4 @@
 providers.csv
 providers.json
+.env
+node_modules/*
