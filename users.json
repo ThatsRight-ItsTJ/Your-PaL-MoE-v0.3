@@ -5,20 +5,20 @@
             "user_id": "123456789",
             "plan": "500k",
             "enabled": true,
-            "total_tokens": 0,
-            "daily_tokens_used": 0,
-            "last_usage_timestamp": null,
-            "last_updated_timestamp": 0
+            "total_tokens": 368,
+            "daily_tokens_used": 368,
+            "last_usage_timestamp": 1758153141,
+            "last_updated_timestamp": 1758153141
         },
         "sk-adminuserkey9876543210fedcbabcdefghijklm": {
             "username": "admin_user",
             "user_id": "987654321",
             "plan": "unlimited",
             "enabled": true,
-            "total_tokens": 153,
-            "daily_tokens_used": 153,
-            "last_usage_timestamp": 1758139995,
-            "last_updated_timestamp": 1758139995
+            "total_tokens": 738,
+            "daily_tokens_used": 738,
+            "last_usage_timestamp": 1758152207,
+            "last_updated_timestamp": 1758152207
         }
     }
 }
