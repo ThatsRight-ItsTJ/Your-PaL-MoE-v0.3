@@ -1,349 +1,391 @@
-# 🚀 Your PaL MoE  
-**API Server for Multi-Provider AI Access with Named Tools**
+# Your-PaL-MoE - AI Provider Management System
 
-Your PaL MoE is an API Porxy Aggregator that provides access to multiple AI providers through Named Tools. It lets you define AI providers in a **simple CSV file** and automatically generates an **OpenAI-compatible `providers.json`**.
+A comprehensive system for managing multiple AI providers with enhanced security features and environment variable-based API key management.
 
-The system features **direct model access**, **provider management**, and a **pluggable parser system** — making it easy to access multiple AI providers through standardized API tools while maintaining compatibility with various model formats.
+## 🚀 Features
 
----
+- **Multi-Provider Support**: Support for 15+ AI providers including OpenRouter, GitHub Models, Zuki Journey, and more
+- **Enhanced Security**: API keys managed through environment variables instead of CSV files
+- **Automatic Key Mapping**: Seamless mapping between provider names and environment variables
+- **Model Search Integration**: HuggingFace API integration for model discovery and capability detection
+- **Security Verification**: Built-in security validation and reporting
+- **Hot Reload Support**: File watching for automatic regeneration when CSV changes
+- **Comprehensive Testing**: Built-in test scripts for provider validation
 
-## ✨ Features
+## 📋 Prerequisites
 
-- **🛠️ Named Tool Integration**  
-  Each model becomes directly callable through the API protocol.
-
-- **⚡ Multi-Provider Support**  
-  Access models from OpenAI, Anthropic, HuggingFace, and other providers through unified tools.
-
-- **🔄 Mode-Aware Execution**  
-  6 different collaboration modes (Council, Collaborate, Race, MetaJudge, Discuss, Fallback) for different teamwork strategies.
-
-- **⚡ Intelligent Request Routing**  
-  Smart routing and load balancing across multiple AI providers with automatic failover.
-
-- **🎯 Intelligent Provider Selection**  
-  Automatic selection of optimal providers based on model capabilities and performance metrics.
-
-- **🔌 Pluggable Parser System**  
-  Extensible parsing framework for different model providers (OpenAI, Anthropic, HuggingFace, etc.).
-
-- **📊 OpenAI Protocol Compliance**  
-  Full API server implementation with OpenAI Compatible endpoints.
-
-- **📄 CSV-Driven Configuration**  
-  Add or update providers in a spreadsheet-friendly CSV format.
-
----
-
-## 🗏️ Architecture
-
-### Core Architecture Pattern
-Your PaL MoE implements an **API Server with Named Tool Registration**. Each model from the configured providers becomes a directly callable Named Tool, allowing API clients to access any model through standardized tool calls.
-
-### Key Architectural Layers
-
-1. **Configuration Layer** ([`rolesConfig.js`](rolesConfig.js))
-   - Manages provider configurations and model specifications
-   - Handles model-to-tool mapping and registration
-
-2. **API Server Layer** ([`taskmaster.js`](taskmaster.js))
-   - Implements API protocol for tool registration and execution
-   - Handles tool discovery and method routing
-
-3. **Tool Execution Layer** ([`modeHandlers.js`](modeHandlers.js))
-   - Executes Named Tool calls to specific models
-   - Handles different collaboration modes when multiple tools are used
-
-4. **Data Processing Layer** ([`parsers/`](parsers/), [`schema/`](schema/))
-   - Standardizes model profiles across providers
-   - Validates and normalizes configuration data
-
-### Workflow Example
-
-1. **API Client Connection**: Client connects to Your PaL MoE API server
-2. **Tool Discovery**: Client discovers available Named Tools (one per model)
-3. **Tool Execution**: Client calls specific model tool (e.g., "gpt-4-turbo", "claude-3-sonnet")
-4. **Request Processing**: Server routes request to appropriate provider
-5. **Response Return**: Formatted response returned through API protocol
-
-### Key Strengths
-
-- **Direct Access**: Each model accessible as individual Named Tool
-- **API Compliance**: Full API protocol implementation
-- **Multi-Provider**: Support for various AI providers in single server
-- **Flexibility**: Multiple execution modes for collaboration scenarios
-- **Simplicity**: Easy provider management through CSV configuration
-
----
-
-## 📂 Project Structure
-
-```
-Your PaL MoE/
-├── providers.csv              # Your provider definitions
-├── providers.json             # Auto-generated for the router
-├── csv-to-providers.js        # CSV → JSON generator module
-├── index.js                   # API server implementation
-├── rolesConfig.js            # Provider and model configuration
-├── taskmaster.js             # Tool registration and execution
-├── modeHandlers.js           # Collaboration mode implementations (optional)
-├── parsers/                  # Pluggable model parsing system
-│   └── index.js              # Provider-specific parsers
-├── schema/                   # Data validation and normalization
-│   └── modelProfileSchema.js # Model profile standards
-├── cache/                    # Cached model profiles
-│   └── model_profiles.json   # Cached provider data
-├── scripts/                  # Utility scripts
-│   └── build-model-profile.js # Profile generation utilities
-└── README.md
-```
-
----
-
-## 💥 Named Tools
-
-Each model configured in your `providers.csv` becomes a Named Tool that API clients can call directly:
-
-### Example Available Tools
-
-- **gpt-4-turbo**: OpenAI's GPT-4 Turbo model
-- **gpt-3.5-turbo**: OpenAI's GPT-3.5 Turbo model  
-- **claude-3-sonnet**: Anthropic's Claude 3 Sonnet model
-- **claude-3-haiku**: Anthropic's Claude 3 Haiku model
-- **llama-2-70b**: Meta's LLaMA 2 70B model
-
-### Tool Call Example
-
-```javascript
-// API client calling specific model tool
-const response = await APIClient.callTool({
-  name: "gpt-4-turbo",
-  arguments: {
-    messages: [
-      { role: "user", content: "Hello, how are you?" }
-    ],
-    temperature: 0.7
-  }
-});
-```
-
----
-
-## 📝 CSV Format
-
-| Name           | Base_URL                  | APIKey         | Model(s)                              | Priority | TokenMultiplier | ForceEndpoint |
-|----------------|---------------------------|----------------|----------------------------------------|----------|-----------------|---------------|
-| OpenAI-Primary | https://api.openai.com/v1 | sk-xxxx        | gpt-4\|gpt-3.5-turbo                      | 1        | 1.0             |               |
-| Pollinations   | https://text.pollinations.ai |               | https://pollinations.ai/api/models    | 2        | 1.0             |               |
-
-- **Model(s)** can be:
-  - A `|`-delimited list of model IDs.
-  - A URL returning a list of models (JSON).
-- **ForceEndpoint** (optional) overrides automatic endpoint detection.
-
----
-
-## ⚙️ How It Works
-
-1. **Server Startup**  
-   API server reads provider configuration and registers each model as a Named Tool.
-
-2. **Tool Registration**  
-   Each model becomes discoverable and callable through the API protocol.
-
-3. **Client Connection**  
-   API clients connect and discover available model tools.
-
-4. **Tool Execution**  
-   Clients call specific model tools with request parameters.
-
-5. **Request Processing**  
-   Server routes requests to appropriate providers and returns responses.
-
-6. **Provider Management**  
-   CSV-driven provider configuration with automatic tool registration.
-
----
-
-## 🚀 Getting Started
-
-### Prerequisites
-- Node.js (v14 or higher)
+- Node.js 16+ 
 - npm or yarn
-- API keys from your preferred AI providers
+- API keys for the providers you want to use
+- HuggingFace API token (for model search functionality)
 
-### 1. Clone & Install
+## 🛠️ Installation
+
+### 1. Clone the Repository
+
 ```bash
-git clone https://github.com/YOUR-USERNAME/Your PaL MoE.git
-cd Your PaL MoE
+git clone <repository-url>
+cd Your-PaL-MoE-v0.3
+```
+
+### 2. Install Dependencies
+
+```bash
 npm install
 ```
 
-### 2. Configure Providers
-Edit [`providers.csv`](providers.csv) with your provider details and model specifications:
+### 3. Create Your providers.csv File
+
+Create a `providers.csv` file with your AI provider configurations:
 
 ```csv
-Name,Base_URL,APIKey,Model(s),Priority,TokenMultiplier,ForceEndpoint
-OpenAI-Primary,https://api.openai.com/v1,sk-your-gpt-key,gpt-4|gpt-3.5-turbo,1,1.0,
-Anthropic-Secondary,https://api.anthropic.com,v1-your-claude-key,claude-3-sonnet|claude-3-haiku,2,1.0,
+Name,Base_URL,APIKey,Model(s)
+OpenRouter,https://openrouter.ai/api/v1,sk-or-v1-your-api-key,gpt-4|claude-3-sonnet
+GitHub_Models,https://github.com/marketplace/models/{registry}/{id},github_pat-your-token,gpt-4|claude-3
 ```
 
-**CSV Fields:**
-- **Name**: Friendly name for your provider
-- **Base_URL**: API endpoint URL
-- **APIKey**: Your API key (leave empty for keyless providers)
-- **Model(s)**: Pipe-separated model IDs or URL to model list
-- **Priority**: Lower numbers = higher priority (1-99)
-- **TokenMultiplier**: Cost adjustment factor (default: 1.0)
-- **ForceEndpoint**: Override automatic endpoint detection (optional)
+### 4. Generate Environment Variables from CSV
 
-### 3. Generate Configuration
-Convert your CSV to JSON configuration:
+Run the extraction script to convert your CSV API keys to environment variables:
+
 ```bash
-node csv-to-providers.js
+node scripts/extract-api-keys-to-env.js
 ```
 
-### 4. Run the API Server
+This will automatically generate:
+- `.env` file with all provider API keys as environment variables
+- `key-mapping.json` for reference
+- `scripts/load-api-keys.sh` to load environment variables
+
+### 5. Manually Add Your HuggingFace API Key
+
+Edit the generated `.env` file and add your HuggingFace API key:
+
 ```bash
-npm start
+# Add this line to your .env file (replace with your actual token)
+HF_API_KEY=hf_your_actual_huggingface_token
 ```
 
-The server will start on `http://localhost:2715` by default.
+### 6. Set Secure File Permissions
 
-### 5. Test Your Setup
-Open your browser to `http://localhost:2715` to see the status page with token usage statistics.
-
-### 6. Connect API Client
-
-#### Using curl (for testing):
 ```bash
-# List available models
-curl http://localhost:2715/v1/models
-
-# Chat with a model
-curl -X POST http://localhost:2715/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_API_KEY" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hello world"}]
-  }'
+chmod 600 .env key-mapping.json
 ```
 
-#### Using JavaScript (Node.js):
-```javascript
-const fetch = require('node-fetch');
+### 7. Verify Security Setup
 
-// Chat with a model
-async function chat() {
-  const response = await fetch('http://localhost:2715/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer YOUR_API_KEY'
-    },
-    body: JSON.stringify({
-      model: 'gpt-4',
-      messages: [{ role: 'user', content: 'Hello world' }]
-    })
-  });
-  
-  const data = await response.json();
-  console.log(data.choices[0].message.content);
-}
-
-chat();
-```
-
-#### Using Python:
-```python
-import requests
-
-# Chat with a model
-response = requests.post(
-    'http://localhost:2715/v1/chat/completions',
-    headers={
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer YOUR_API_KEY'
-    },
-    json={
-        'model': 'gpt-4',
-        'messages': [{'role': 'user', 'content': 'Hello world'}]
-    }
-)
-
-print(response.json()['choices'][0]['message']['content'])
-```
-
-### 7. User Management (Optional)
-
-Create users with different plans using the admin API:
 ```bash
-# Add a user with free plan (500k tokens daily)
-curl -X POST http://localhost:2715/admin/keys \
-  -H "Authorization: Bearer YOUR_ADMIN_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "action": "add",
-    "api_key": "sk-user-key",
-    "username": "testuser",
-    "plan": "500k"
-  }'
+export USE_ENV_KEYS=true
+node scripts/verify-security-setup.js
 ```
 
-### Available Endpoints
+## 🔧 Usage
 
-- `GET /v1/models` - List available models
-- `POST /v1/chat/completions` - Chat completion
-- `POST /v1/images/generations` - Image generation
-- `POST /v1/audio/transcriptions` - Audio transcription
-- `POST /v1/audio/speech` - Text to speech
-- `GET /v1/usage` - Token usage statistics
-- `GET /admin/keys` - User management (requires admin key)
+### Basic Usage
+
+```bash
+# Enable environment mode for API key management
+export USE_ENV_KEYS=true
+
+# Generate secured providers.json from environment variables
+node csv-to-providers-secure-final.js
+
+# Test all configured providers
+node test-providers-script.js
+```
+
+### Using the Environment Loader
+
+```bash
+# Load all environment variables from the generated script
+./scripts/load-api-keys.sh
+
+# Then run your application
+node your-app.js
+```
+
+### Development Mode with Hot Reload
+
+```bash
+# Enable hot reload and environment mode
+export USE_ENV_KEYS=true
+export WATCH=1
+export LOG_LEVEL=debug
+node csv-to-providers-secure-final.js
+```
+
+## 📁 Project Structure
+
+```
+Your-PaL-MoE-v0.3/
+├── providers.csv                    # User-provided provider configuration (delete after migration)
+├── providers.json                   # Generated provider configuration
+├── .env                             # Environment variables (auto-generated)
+├── key-mapping.json                 # Provider to environment variable mapping
+├── scripts/
+│   ├── extract-api-keys-to-env.js   # API key extraction script
+│   ├── key-mapping-utils.js         # Key mapping utilities
+│   ├── verify-security-setup.js     # Security verification script
+│   └── load-api-keys.sh             # Environment loader script
+├── csv-to-providers-secure-final.js # Main conversion script
+├── test-providers-script.js         # Provider testing script
+└── README.md                        # This file
+```
+
+## 🔐 Security Features
+
+### Environment Variable Management
+
+- **Provider API Keys**: Automatically extracted from CSV and converted to environment variables
+- **System API Keys**: Manual configuration for keys like HF_API_KEY
+- **Key Mapping**: Automatic mapping between provider names and environment variables
+- **Secure Storage**: API keys never stored in source code or version control
+
+### Security Verification
+
+The system includes comprehensive security validation:
+
+```bash
+node scripts/verify-security-setup.js
+```
+
+Checks performed:
+- Environment variable validation
+- File permission verification
+- Security best practices compliance
+- Migration completeness assessment
+
+### Security Best Practices
+
+1. **Never commit `.env` files** to version control
+2. **Add `.env` to `.gitignore`**:
+   ```bash
+   echo ".env" >> .gitignore
+   ```
+3. **Use proper file permissions**: `chmod 600 .env`
+4. **Delete providers.csv** after successful migration
+5. **Regularly rotate API keys**
+6. **Monitor API usage** for suspicious activity
+
+## 🧪 Testing
+
+### Provider Testing
+
+Test all configured providers:
+
+```bash
+export USE_ENV_KEYS=true
+node test-providers-script.js
+```
+
+This will:
+- Test each provider with a sample prompt
+- Generate test results and reports
+- Save detailed logs for analysis
+
+### Security Testing
+
+Run comprehensive security tests:
+
+```bash
+export USE_ENV_KEYS=true
+node scripts/verify-security-setup.js
+```
+
+## 🔧 Configuration
+
+### Environment Variables
+
+#### Required Variables
+
+```bash
+# HuggingFace API Key (required for model search)
+HF_API_KEY=hf_your_huggingface_token
+
+# Provider API Keys (auto-generated or manual)
+API_KEY_OPENROUTER=your-openrouter-key
+API_KEY_GITHUB_MODELS=your-github-key
+# ... other provider keys
+```
+
+#### Optional Variables
+
+```bash
+# Enable environment mode for API keys
+USE_ENV_KEYS=true
+
+# CSV file path (default: ./providers.csv)
+CSV_PATH=./custom-providers.csv
+
+# Output path for generated JSON (default: ./providers.json)
+OUTPUT_PATH=./custom-providers.json
+
+# Logging level
+LOG_LEVEL=debug
+
+# Request timeout in milliseconds
+TIMEOUT_MS=12000
+
+# Number of retry attempts
+RETRIES=2
+
+# Concurrency level
+CONCURRENCY=6
+
+# Enable hot reload
+WATCH=1
+```
+
+### CSV Configuration Format
+
+```csv
+Name,Base_URL,APIKey,Model(s)
+ProviderName,https://api.example.com/v1,sk-your-key,model1|model2|model3
+```
+
+## 📊 Monitoring and Logging
+
+### Log Levels
+
+- `error`: Only errors
+- `warn`: Warnings and errors
+- `info`: Information, warnings, and errors (default)
+- `debug`: All logging
+
+### Log Files
+
+- Application logs: `logs/app.log`
+- Test results: `test-results-<timestamp>.json`
+- Security reports: `security-report.json`
+
+## 🚀 Deployment
+
+### Production Setup
+
+1. **Set environment variables**:
+   ```bash
+   export USE_ENV_KEYS=true
+   export LOG_LEVEL=info
+   export TIMEOUT_MS=15000
+   ```
+
+2. **Verify security**:
+   ```bash
+   node scripts/verify-security-setup.js
+   ```
+
+3. **Delete sensitive files**:
+   ```bash
+   rm providers.csv
+   chmod 600 .env key-mapping.json
+   ```
+
+4. **Start your application**:
+   ```bash
+   node your-app.js
+   ```
+
+### Docker Deployment
+
+```dockerfile
+FROM node:16-alpine
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY . .
+RUN rm providers.csv
+RUN chmod 600 .env
+
+EXPOSE 3000
+CMD ["node", "your-app.js"]
+```
+
+## 🤝 Contributing
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests if applicable
+5. Ensure security best practices
+6. Submit a pull request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the LICENSE file for details.
+
+## 🆘 Support and Troubleshooting
+
+### Common Issues
+
+#### Missing Environment Variables
+
+```bash
+# Check if environment variables are loaded
+node -e "console.log('HF_API_KEY:', process.env.HF_API_KEY ? '✅ Set' : '❌ Missing')"
+
+# Load environment variables
+./scripts/load-api-keys.sh
+```
+
+#### Permission Issues
+
+```bash
+# Fix file permissions
+chmod 600 .env key-mapping.json
+chmod 755 scripts/load-api-keys.sh
+```
+
+#### Provider Testing Failures
+
+```bash
+# Run with debug logging
+export LOG_LEVEL=debug
+export USE_ENV_KEYS=true
+node test-providers-script.js
+```
+
+### Getting Help
+
+1. Check the generated `security-report.json` for detailed analysis
+2. Review test logs in `test-results-*.json` files
+3. Consult the troubleshooting section in the migration guide
+4. Open an issue with detailed error logs
+
+## 🔄 Migration from CSV to Environment Variables
+
+For detailed migration instructions, see [`docs/security/migration-guide.md`](docs/security/migration-guide.md).
+
+### Quick Migration
+
+```bash
+# 1. Extract API keys to environment variables
+node scripts/extract-api-keys-to-env.js
+
+# 2. Add your HuggingFace API key
+echo "HF_API_KEY=hf_your_token" >> .env
+
+# 3. Set permissions
+chmod 600 .env key-mapping.json
+
+# 4. Verify security
+export USE_ENV_KEYS=true
+node scripts/verify-security-setup.js
+
+# 5. Delete CSV file (after verification)
+rm providers.csv
+```
+
+## 🎯 Roadmap
+
+- [ ] Add more AI providers
+- [ ] Implement rate limiting
+- [ ] Add usage analytics
+- [ ] Create web dashboard
+- [ ] Add automated key rotation
+- [ ] Implement caching for model searches
 
 ---
 
-## 📋 Example Tool Response
-
-```json
-{
-  "toolName": "gpt-4-turbo",
-  "result": {
-    "choices": [{
-      "message": {
-        "role": "assistant",
-        "content": "def sort_array(arr):\n    return sorted(arr)"
-      }
-    }],
-    "usage": {
-      "prompt_tokens": 12,
-      "completion_tokens": 15,
-      "total_tokens": 27
-    }
-  }
-}
-```
-
----
-
-## 🧠 Roadmap
-
-- [ ] Enhanced API protocol feature support
-- [ ] Dynamic model discovery and registration
-- [ ] Real-time provider health monitoring
-- [ ] Advanced collaboration modes for multi-model workflows
-- [ ] Provider-specific parameter optimization
-- [ ] API client libraries and documentation
-
----
-
-## 📜 License
-MIT License — see [LICENSE](LICENSE) for details.
-
----
-
-## 🙌 Acknowledgements
-- [Model Context Protocol (API)](https://modelcontextprotocol.org/) for the protocol specification
-- [Exoml Router](https://github.com/exomlapi/exomlapi) for the original routing framework
-- All AI providers integrated via Your PaL MoE
-- The open-source AI community for inspiration and contributions
+**Note**: This system is designed for educational and development purposes. Always follow security best practices when handling API keys and sensitive information in production environments.

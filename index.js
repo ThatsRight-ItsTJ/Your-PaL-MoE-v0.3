@@ -1,3 +1,4 @@
+require("dotenv").config();
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -15,7 +16,7 @@ const writeFileAsync = promisify(fs.writeFile);
 
 const upload = multer({ storage: multer.memoryStorage() });
 
-const PORT = 2715;
+const PORT = process.env.PORT || 2715;
 const HOST = '0.0.0.0';
 const CONFIG_FILE = 'providers.json';
 const USERS_CONFIG_FILE = 'users.json';

@@ -19,6 +19,7 @@
  *   CONCURRENCY=6
  *   HF_API_KEY=your_huggingface_api_key
  *   SECURITY_MODE=strict | basic (default: basic)
+ *   DYNAMIC_RESPONSE_DETECTION=true | false (default: true) - enable dynamic response format detection
  */
 
 require('dotenv').config();
@@ -26,6 +27,7 @@ const fs = require('fs');
 const path = require('path');
 const csvParser = require('csv-parser');
 const { setTimeout: delay } = require('timers/promises');
+const keyMapping = require('./key-mapping.json');
 
 // Use node-fetch for HTTP requests
 let fetch;
@@ -38,6 +40,7 @@ let fetch;
 
 const SECURITY_MODE = process.env.SECURITY_MODE || 'basic';
 const MASK_API_KEYS = SECURITY_MODE !== 'none';
+const DYNAMIC_RESPONSE_DETECTION = process.env.DYNAMIC_RESPONSE_DETECTION !== 'false';
 
 /* ------------------------------ Config ------------------------------ */
 
@@ -49,6 +52,7 @@ const TIMEOUT_MS = Number(process.env.TIMEOUT_MS || 12000);
 const RETRIES = Number(process.env.RETRIES || 2);
 const CONCURRENCY = Math.max(1, Number(process.env.CONCURRENCY || 6));
 const HF_API_KEY = process.env.HF_API_KEY || '';
+const USE_ENV_KEYS = true; // Always use environment variables for API keys
 
 /* ------------------------------ Logger ------------------------------ */
 
@@ -307,6 +311,19 @@ function normalizeModelId(raw) {
   // Common qualifiers like ":free"
   m = m.replace(/:free$/i, '');
 
+  // Handle OpenRouter-specific format: "Qwen: Qwen3 Coder Flash" -> "qwen/qwen3-coder-flash"
+  if (m.includes(':') && !m.includes('/')) {
+    // This looks like an OpenRouter format "Provider: Model Name"
+    const parts = m.split(':');
+    if (parts.length >= 2) {
+      const provider = parts[0].trim().toLowerCase();
+      const model = parts[1].trim().toLowerCase();
+      // Convert spaces to hyphens and remove special characters
+      const cleanModel = model.replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
+      return `${provider}/${cleanModel}`;
+    }
+  }
+
   // If it's a namespaced id like "org/model", keep full format for HF models
   if (m.includes('/') && !m.includes('://')) {
     return m; // Keep HuggingFace format like "microsoft/DialoGPT-medium"
@@ -406,6 +423,133 @@ function inferCapabilitiesFromModelName(modelName = '') {
   }
   
   return capabilities;
+}
+
+/**
+ * Detect response format dynamically by making a test request
+ */
+async function detectResponseFormatDynamic(providerName = '', baseURL = '', apiKey = '') {
+  const nameLower = providerName.toLowerCase();
+  const urlLower = baseURL.toLowerCase();
+  
+  // First, try pattern-based detection for known providers
+  if (nameLower.includes('openrouter')) {
+    return 'html';
+  }
+  
+  if (urlLower.includes('openrouter.ai')) {
+    return 'html';
+  }
+  
+  // For other providers, make a test request to detect format
+  try {
+    const testEndpoint = '/v1/chat/completions';
+    const testUrl = new URL(testEndpoint, baseURL).href;
+    
+    const testPayload = JSON.stringify({
+      model: 'test-model',
+      messages: [{ role: 'user', content: 'test' }],
+      max_tokens: 5
+    });
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(testPayload),
+      'User-Agent': 'Your-PaL-MoE/0.3-Detector'
+    };
+    
+    if (apiKey) {
+      headers['Authorization'] = `Bearer ${apiKey}`;
+    }
+    
+    log('debug', `Testing response format for ${providerName} at ${testUrl}`);
+    
+    const response = await fetch(testUrl, {
+      method: 'POST',
+      headers: headers,
+      body: testPayload,
+      timeout: 5000 // 5 second timeout for test
+    });
+    
+    const responseData = await response.text();
+    
+    // Check if response is HTML
+    if (responseData.includes('<') && responseData.includes('>')) {
+      // Look for HTML-specific patterns
+      if (responseData.includes('<title>') || responseData.includes('<html') || responseData.includes('<body')) {
+        log('debug', `Detected HTML response format for ${providerName}`);
+        return 'html';
+      }
+    }
+    
+    // Try to parse as JSON
+    try {
+      JSON.parse(responseData);
+      log('debug', `Detected JSON response format for ${providerName}`);
+      return 'json';
+    } catch (jsonError) {
+      log('debug', `Response is not valid JSON for ${providerName}, assuming HTML`);
+      return 'html';
+    }
+    
+  } catch (error) {
+    log('debug', `Failed to detect response format for ${providerName}:`, sanitizeError(error));
+    // Fallback to pattern-based detection
+    return detectResponseFormatPattern(providerName, baseURL);
+  }
+}
+
+/**
+ * Pattern-based response format detection (fallback)
+ */
+function detectResponseFormatPattern(providerName = '', baseURL = '') {
+  const nameLower = providerName.toLowerCase();
+  const urlLower = baseURL.toLowerCase();
+  
+  // Providers known to return HTML responses
+  if (nameLower.includes('openrouter')) {
+    return 'html';
+  }
+  
+  // Providers known to return JSON responses
+  if (nameLower.includes('z.ai') ||
+      nameLower.includes('bigmodel') ||
+      nameLower.includes('imagerouter') ||
+      nameLower.includes('github') ||
+      nameLower.includes('voidai') ||
+      nameLower.includes('zuki') ||
+      nameLower.includes('helix') ||
+      nameLower.includes('electron') ||
+      nameLower.includes('mnn') ||
+      nameLower.includes('navy')) {
+    return 'json';
+  }
+  
+  // Additional URL-based detection
+  if (urlLower.includes('openrouter.ai')) {
+    return 'html';
+  }
+  
+  if (urlLower.includes('api.z.ai') ||
+      urlLower.includes('open.bigmodel.cn') ||
+      urlLower.includes('api.imagerouter.io') ||
+      urlLower.includes('models.github.ai')) {
+    return 'json';
+  }
+  
+  // Default to JSON for most APIs
+  return 'json';
+}
+
+/**
+ * Detect response format based on provider name and URL patterns
+ * (Legacy function for backward compatibility)
+ */
+async function detectResponseFormat(providerName = '', baseURL = '', apiKey = '') {
+  if (DYNAMIC_RESPONSE_DETECTION) {
+    return await detectResponseFormatDynamic(providerName, baseURL, apiKey);
+  }
+  return detectResponseFormatPattern(providerName, baseURL);
 }
 
 /* ------------------------------ HuggingFace API Integration ------------------------------ */
@@ -876,8 +1020,17 @@ function getCol(row, keys, fallback = '') {
 
 async function resolveModelsForRow(row) {
   const modelField = cleanString(getCol(row, ['Model(s)', 'Models', 'Model', 'model', 'models']));
-  const apiKey = cleanString(getCol(row, ['APIKey', 'ApiKey', 'api_key', 'apiKey']));
   const providerName = cleanString(getCol(row, ['Name', 'Provider', 'provider_name', 'ProviderName']));
+  
+  // Get API key from environment variable if USE_ENV_KEYS is enabled
+  let apiKey = '';
+  if (USE_ENV_KEYS && keyMapping && keyMapping[providerName]) {
+    apiKey = process.env[keyMapping[providerName].envVar] || '';
+    log('debug', `Using environment variable ${keyMapping[providerName].envVar} for provider ${providerName}`);
+  } else {
+    apiKey = cleanString(getCol(row, ['APIKey', 'ApiKey', 'api_key', 'apiKey']));
+    log('debug', `Using CSV API key for provider ${providerName}`);
+  }
   
   if (!modelField) {
     log('warn', 'No Model(s) field provided');
@@ -1043,7 +1196,6 @@ async function generateProvidersJSON(csvPath, outputPath) {
       // Extract and validate required fields
       const providerName = sanitizeInput(cleanString(getCol(row, ['Name', 'Provider', 'provider_name', 'ProviderName'], `Provider_${idx + 1}`)), 'name');
       const baseURL = sanitizeInput(cleanString(getCol(row, ['Base_URL', 'BaseURL', 'Base Url', 'base_url'])), 'url');
-      const apiKey = sanitizeInput(cleanString(getCol(row, ['APIKey', 'ApiKey', 'api_key', 'apiKey'])), 'key');
       const modelField = cleanString(getCol(row, ['Model(s)', 'Models', 'Model', 'model', 'models']));
       const priority = parseNumber(getCol(row, ['Priority', 'priority']), 99);
       const tokenMultiplier = parseNumber(getCol(row, ['TokenMultiplier', 'token_multiplier']), 1.0);
@@ -1052,6 +1204,16 @@ async function generateProvidersJSON(csvPath, outputPath) {
       // Extract and parse rate limit/cost information
       const rateLimitCostInfo = cleanString(getCol(row, ['Rate Limit/Cost Info', 'RateLimit', 'CostInfo', 'rate_limit', 'cost_info']));
       const parsedCostInfo = parseRateLimitCostInfo(rateLimitCostInfo);
+      
+      // Get API key from environment variable if USE_ENV_KEYS is enabled
+      let apiKey = '';
+      if (USE_ENV_KEYS && keyMapping && keyMapping[providerName]) {
+        apiKey = process.env[keyMapping[providerName].envVar] || '';
+        log('debug', `Using environment variable ${keyMapping[providerName].envVar} for provider ${providerName}`);
+      } else {
+        apiKey = sanitizeInput(cleanString(getCol(row, ['APIKey', 'ApiKey', 'api_key', 'apiKey'])), 'key');
+        log('debug', `Using CSV API key for provider ${providerName}`);
+      }
 
       // Required field validation
       if (!providerName) {
@@ -1111,6 +1273,9 @@ async function generateProvidersJSON(csvPath, outputPath) {
           meta: entry.meta || {},
         });
 
+        // Use dynamic response format detection with fallback
+        const responseFormat = await detectResponseFormatDynamic(providerName, baseURL, apiKey);
+        
         const providerConfig = {
           provider_name: providerName,
           base_url: baseURL,
@@ -1119,6 +1284,7 @@ async function generateProvidersJSON(csvPath, outputPath) {
           priority: priority,
           token_multiplier: tokenMultiplier,
           capabilities: entry.capabilities || [],
+          response_format: responseFormat, // Add response format detection
           metadata: {
             ...entry.meta,
             rate_limit_cost_info: parsedCostInfo,
@@ -1212,6 +1378,13 @@ async function main() {
       process.env.HF_API_KEY = 'vic-test-anthropic-key-789012';
     }
     
+    // Always use environment variables for API keys
+    log('info', 'Environment variable mode enabled - reading API keys from environment variables');
+    if (!fs.existsSync('./key-mapping.json')) {
+      log('warn', 'Key mapping file not found. Run extract-api-keys-to-env.js first.');
+      process.exit(1);
+    }
+    
     await generateProvidersJSON(CSV_PATH, OUTPUT_PATH);
     log('info', 'Successfully generated providers.json with security enhancements');
   } catch (e) {
@@ -1244,5 +1417,8 @@ module.exports = {
   sanitizeInput,
   validateURL,
   sanitizeOutput,
-  sanitizeError
+  sanitizeError,
+  detectResponseFormat,
+  detectResponseFormatDynamic,
+  detectResponseFormatPattern
 };

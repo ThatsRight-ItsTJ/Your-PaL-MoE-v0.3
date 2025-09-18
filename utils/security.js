@@ -50,7 +50,7 @@ const validators = {
     },
     
     validateProvider: (provider) => {
-        const required = ['name', 'baseURL', 'models'];
+        const required = ['provider_name', 'base_url', 'model'];
         return required.every(field => provider && provider[field]);
     },
     
