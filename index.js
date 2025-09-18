@@ -10,6 +10,13 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const compression = require('compression');
+const securityMiddleware = require('./security-middleware');
+const enhancedAuth = require('./enhanced-auth');
+const { errorHandler, notFoundHandler, asyncHandler, errorMonitor } = require('./error-handler');
+const securityValidator = require('./security-validation-utils').securityValidator;
+const securityAuditLogger = require('./security-audit-logger').securityAuditLogger;
+const healthCheckService = require('./health-check').healthCheckService;
 
 const readFileAsync = promisify(fs.readFile);
 const writeFileAsync = promisify(fs.writeFile);
@@ -20,26 +27,33 @@ const PORT = process.env.PORT || 2715;
 const HOST = '0.0.0.0';
 const CONFIG_FILE = 'providers.json';
 const USERS_CONFIG_FILE = 'users.json';
-const ADMIN_API_KEY = '';
+const ADMIN_API_KEY = process.env.ADMIN_API_KEY || '';
 const STATIC_DIRECTORY = __dirname;
 const SECURITY_CONFIG_FILE = 'security-config.json';
 const JWT_SECRET = crypto.randomBytes(32).toString('hex');
 const API_KEY_SALT = crypto.randomBytes(16).toString('hex');
 
+// Load security configuration template
+const securityTemplate = require('./config/security-template');
+
 // Default security configuration
 let securityConfig = {
-  enableApiKeyRotation: true,
-  apiKeyRotationInterval: 86400000, // 24 hours in milliseconds
-  enableRateLimiting: true,
-  rateLimitWindowMs: 900000, // 15 minutes
-  rateLimitMaxRequests: 100,
-  enableIpWhitelist: false,
-  ipWhitelist: ['127.0.0.1', '::1'],
-  enableRequestLogging: true,
-  maskSensitiveHeaders: true,
-  enableHelmet: true,
-  enableCSP: true,
-  allowedOrigins: ['*']
+  ...securityTemplate,
+  enableApiKeyRotation: process.env.ENABLE_API_KEY_ROTATION !== 'false',
+  apiKeyRotationInterval: parseInt(process.env.API_KEY_ROTATION_INTERVAL) || 86400000, // 24 hours in milliseconds
+  enableRateLimiting: process.env.ENABLE_RATE_LIMITING !== 'false',
+  rateLimitWindowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 900000, // 15 minutes
+  rateLimitMaxRequests: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100,
+  enableIpWhitelist: process.env.ENABLE_IP_WHITELIST !== 'false',
+  ipWhitelist: process.env.IP_WHITELIST ? JSON.parse(process.env.IP_WHITELIST) : ['127.0.0.1', '::1'],
+  enableRequestLogging: process.env.ENABLE_REQUEST_LOGGING !== 'false',
+  maskSensitiveHeaders: process.env.MASK_SENSITIVE_HEADERS !== 'false',
+  enableHelmet: process.env.ENABLE_HELMET !== 'false',
+  enableCSP: process.env.ENABLE_CSP !== 'false',
+  allowedOrigins: process.env.ALLOWED_ORIGINS ? JSON.parse(process.env.ALLOWED_ORIGINS) : ['*'],
+  enableApiKeyExpiry: process.env.ENABLE_API_KEY_EXPIRY !== 'false',
+  defaultExpiryDays: parseInt(process.env.DEFAULT_KEY_EXPIRY_DAYS) || 30,
+  enableScopes: process.env.ENABLE_PERMISSION_SCOPES !== 'false'
 };
 
 let providersConfig = { endpoints: {} };
@@ -271,121 +285,135 @@ async function loadConfigurations() {
     usersConfig = loadedUsersConfig;
     availableModelsList = _generateModelsList(providersConfig);
 
+    // Update app.locals for middleware access
+    app.locals.providersConfig = providersConfig;
+    app.locals.usersConfig = usersConfig;
+    app.locals.securityConfig = securityConfig;
+
     return { providersConfig, usersConfig };
 }
 
 const app = express();
 
-// Apply security middleware
-if (securityConfig.enableHelmet) {
-    app.use(helmet({
-        contentSecurityPolicy: securityConfig.enableCSP ? {
-            directives: {
-                defaultSrc: ["'self'"],
-                scriptSrc: ["'self'", "'unsafe-inline'"],
-                styleSrc: ["'self'", "'unsafe-inline'"],
-                imgSrc: ["'self'", "data:", "https:"],
-                connectSrc: ["'self'", "http:", "https:"]
-            }
-        } : false
-    }));
-}
+// Store configurations in app.locals for middleware access
+app.locals.securityConfig = securityConfig;
+app.locals.usersConfig = usersConfig;
 
-// Apply CORS with security headers
-app.use(cors({
-    origin: (origin, callback) => {
-        if (!origin || securityConfig.allowedOrigins.includes('*') || securityConfig.allowedOrigins.includes(origin)) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
+// Apply security middleware
+app.use(securityMiddleware.configureSecurityHeaders(app, securityConfig));
+app.use(securityMiddleware.configureCORS(app, securityConfig));
+app.use(securityMiddleware.requestLogging);
+app.use(securityMiddleware.validateInput);
+app.use(securityMiddleware.preventPathTraversal);
+
+// Apply compression middleware
+app.use(compression({
+    level: 6,
+    threshold: 1024,
+    filter: (req, res) => {
+        if (req.headers['x-no-compression']) {
+            return false;
         }
-    },
-    methods: ['GET', 'POST', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-API-Key'],
-    exposedHeaders: ['Content-Length', 'X-Powered-By'],
-    credentials: true,
-    maxAge: 86400
+        return compression.filter(req, res);
+    }
 }));
 
-// Apply rate limiting
-if (securityConfig.enableRateLimiting) {
-    const apiLimiter = rateLimit({
-        windowMs: securityConfig.rateLimitWindowMs,
-        max: securityConfig.rateLimitMaxRequests,
-        standardHeaders: true,
-        legacyHeaders: false,
-        message: {
-            error: "Too many requests from this IP, please try again later."
+// Apply request size limiting
+app.use(express.json({
+    limit: process.env.BODY_PARSER_LIMIT || '10mb',
+    verify: (req, res, buf, encoding) => {
+        if (buf.length > 1024 * 1024) { // 1MB limit
+            throw new Error('Request entity too large');
         }
-    });
-    
-    // Apply rate limiting to all routes except admin
-    app.use((req, res, next) => {
-        if (req.path.startsWith('/admin/')) {
-            next();
-        } else {
-            apiLimiter(req, res, next);
-        }
-    });
-}
+    }
+}));
 
-// Apply IP whitelist if enabled
-if (securityConfig.enableIpWhitelist) {
-    app.use((req, res, next) => {
-        const clientIp = req.ip || req.connection.remoteAddress || req.socket.remoteAddress;
-        
-        if (securityConfig.ipWhitelist.includes(clientIp) ||
-            securityConfig.ipWhitelist.includes('::ffff:' + clientIp)) {
-            next();
-        } else {
-            res.status(403).json({ error: "Access denied from this IP address." });
-        }
-    });
-}
+// Apply enhanced authentication middleware
+app.use(enhancedAuth.createAuthMiddleware(securityConfig, usersConfig));
 
-// Request logging middleware
-if (securityConfig.enableRequestLogging) {
-    app.use((req, res, next) => {
-        const startTime = Date.now();
-        
-        // Log request details
-        const logData = {
-            method: req.method,
-            path: req.path,
-            ip: req.ip,
-            userAgent: req.get('User-Agent'),
-            timestamp: new Date().toISOString(),
-            duration: Date.now() - startTime
-        };
-        
-        // Mask sensitive headers if enabled
-        if (securityConfig.maskSensitiveHeaders) {
-            const authHeader = req.headers.authorization;
-            if (authHeader) {
-                logData.authorization = authHeader.substring(0, 10) + '...';
-            }
+// Apply compression middleware
+app.use(compression({
+    level: 6,
+    threshold: 1024,
+    filter: (req, res) => {
+        if (req.headers['x-no-compression']) {
+            return false;
         }
-        
-        console.log('Request:', logData);
-        
-        // Log response details
-        res.on('finish', () => {
-            const endTime = Date.now();
-            console.log('Response:', {
-                method: req.method,
-                path: req.path,
-                statusCode: res.statusCode,
-                duration: endTime - startTime
-            });
-        });
-        
-        next();
-    });
-}
+        return compression.filter(req, res);
+    }
+}));
 
-app.use(express.json({ limit: '10mb' }));
+// Apply request size limiting
+app.use(express.json({
+    limit: process.env.BODY_PARSER_LIMIT || '10mb',
+    verify: (req, res, buf, encoding) => {
+        if (buf.length > 1024 * 1024) { // 1MB limit
+            throw new Error('Request entity too large');
+        }
+    }
+}));
 
 app.use(express.static(STATIC_DIRECTORY));
+
+// Add health check endpoint
+app.get('/health', asyncHandler(async (req, res) => {
+  try {
+    const healthResults = await healthCheckService.runAllChecks();
+    res.status(healthResults.status === 'healthy' ? 200 : 503).json(healthResults);
+  } catch (error) {
+    const errorResponse = {
+      timestamp: new Date().toISOString(),
+      status: 'unhealthy',
+      error: {
+        message: 'Health check failed',
+        details: error.message
+      }
+    };
+    res.status(503).json(errorResponse);
+  }
+}));
+
+// Add security audit endpoint (admin only)
+app.get('/admin/security-audit', asyncHandler(async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    let providedApiKey = null;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      providedApiKey = authHeader.split(' ')[1];
+    }
+
+    if (providedApiKey !== ADMIN_API_KEY) {
+      throw new SecurityError('Forbidden: Invalid admin API key.', 403);
+    }
+
+    const dateStr = req.query.date || new Date().toISOString().split('T')[0];
+    const logFile = `./logs/security-audit/security-audit-${dateStr}.log`;
+    
+    if (fs.existsSync(logFile)) {
+      const auditLogs = await fs.readFile(logFile, 'utf8');
+      res.status(200).json({
+        date: dateStr,
+        logs: auditLogs.split('\n').filter(line => line.trim()).map(line => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            return { raw: line };
+          }
+        })
+      });
+    } else {
+      res.status(404).json({
+        error: 'No audit logs found for the specified date',
+        date: dateStr
+      });
+    }
+  } catch (error) {
+    res.status(500).json({
+      error: 'Failed to retrieve audit logs',
+      details: error.message
+    });
+  }
+}));
 
 
 /**
@@ -475,72 +503,15 @@ async function rotateApiKeys() {
 }
 
 /**
- * Express middleware for authenticating requests based on API keys in `users.json`.
+ * Enhanced authentication middleware that uses the enhanced-auth module.
  * Checks for API key validity, enabled status, and daily token limits.
  * @param {import('express').Request} req - Express request object.
  * @param {import('express').Response} res - Express response object.
  * @param {import('express').NextFunction} next - Express next middleware function.
  */
 async function authenticateRequest(req, res, next) {
-    if (!usersConfig || !usersConfig.users || Object.keys(usersConfig.users).length === 0) {
-        req.authenticated = true;
-        return next();
-    }
-
-    // Check for API key in Authorization header
-    const authHeader = req.headers.authorization;
-    let apiKey = null;
-    
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        apiKey = authHeader.split(' ')[1];
-    } else if (req.headers['x-api-key']) {
-        apiKey = req.headers['x-api-key'];
-    }
-
-    if (!apiKey) {
-        return res.status(401).json({ error: "API key required in Authorization header or X-API-Key header." });
-    }
-
-    const user_info = usersConfig.users[apiKey];
-
-    if (!user_info || !user_info.enabled) {
-        return res.status(403).json({ error: "Invalid or disabled API key." });
-    }
-
-    // Check if API key needs rotation
-    if (needsApiKeyRotation(user_info)) {
-        console.log(`API key rotation needed for user: ${user_info.username || 'Unknown'}`);
-        // Note: In a production environment, you might want to rotate the key here
-        // or notify the user to get a new key
-    }
-
-    const userPlan = user_info.plan || "0";
-    const dailyLimit = getDailyLimitFromPlan(userPlan);
-
-    if (dailyLimit !== null && dailyLimit >= 0) {
-        let lastUsageTimestamp = user_info.last_usage_timestamp;
-        let dailyTokensUsed = user_info.daily_tokens_used || 0;
-
-        if (isNewDay(lastUsageTimestamp)) {
-            dailyTokensUsed = 0;
-        }
-
-        if (dailyTokensUsed >= dailyLimit) {
-            const limitStr = dailyLimit > 0 ? dailyLimit.toLocaleString() : "0";
-            return res.status(429).json({
-                error: {
-                    message: `You have reached or exceeded your daily token limit of ${limitStr} tokens. Limit resets UTC midnight.`,
-                    type: "tokens",
-                    code: "daily_limit_exceeded"
-                }
-            });
-        }
-    }
-
-    req.authenticatedApiKey = apiKey;
-    req.authenticatedUserInfo = user_info;
-    const limitDisplay = dailyLimit !== null && dailyLimit >= 0 ? dailyLimit.toLocaleString() : 'Unlimited';
-    req.authenticated = true;
+    // The enhanced authentication is already applied globally
+    // This function is kept for backward compatibility
     next();
 }
 
@@ -551,7 +522,7 @@ async function authenticateRequest(req, res, next) {
  * GET /admin/keys
  * Retrieves the current user/key configurations. Requires ADMIN_API_KEY.
  */
-app.get('/admin/keys', async (req, res) => {
+app.get('/admin/keys', asyncHandler(async (req, res) => {
     const authHeader = req.headers.authorization;
     let providedApiKey = null;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -559,18 +530,14 @@ app.get('/admin/keys', async (req, res) => {
     }
 
     if (providedApiKey !== ADMIN_API_KEY) {
-        return res.status(403).json({ error: "Forbidden: Invalid admin API key." });
+        throw new SecurityError('Forbidden: Invalid admin API key.', 403);
     }
 
-    try {
-        await loadConfigurations();
-        const currentUsersData = usersConfig.users;
+    await loadConfigurations();
+    const currentUsersData = usersConfig.users;
 
-        res.status(200).json({ users: currentUsersData });
-    } catch (e) {
-        res.status(500).json({ error: `Internal server error processing ExoML Router Admin GET request: ${e.message}` });
-    }
-});
+    res.status(200).json({ users: currentUsersData });
+}));
 
 
 
@@ -579,16 +546,15 @@ app.get('/admin/keys', async (req, res) => {
  * Returns a list of available models based on the loaded provider configuration.
  * Conforms to the OpenAI API spec for listing models.
  */
-app.get('/v1/models', (req, res) => {
+app.get('/v1/models', asyncHandler(async (req, res) => {
     res.status(200).json({ object: 'list', data: availableModelsList });
-});
+}));
 
 /**
  * GET /v1/usage
  * Returns aggregate token usage statistics (total and daily).
  */
-app.get('/v1/usage', async (req, res) => {
-
+app.get('/v1/usage', asyncHandler(async (req, res) => {
     let totalTokensProcessed = 0;
     let dailyTokensProcessed = 0;
     const currentUsersData = usersConfig.users;
@@ -617,7 +583,7 @@ app.get('/v1/usage', async (req, res) => {
         timestamp_utc: new Date().toISOString()
     };
     res.status(200).json(usageData);
-});
+}));
 
 /**
  * POST /v1/*
@@ -626,21 +592,42 @@ app.get('/v1/usage', async (req, res) => {
  * Handles both streaming (SSE) and non-streaming responses.
  * Updates user token counts after successful requests.
  */
-app.post('/v1/*', authenticateRequest, async (req, res) => {
+app.post('/v1/*', authenticateRequest, asyncHandler(async (req, res) => {
+    try {
+        // Log authentication attempt
+        await securityAuditLogger.logAuthenticationEvent('api_request', {
+            endpoint: req.path,
+            method: req.method
+        }, req);
 
-    if (!providersConfig || !providersConfig.endpoints) {
-        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
-    }
+        // Validate request body size
+        securityValidator.validateRequestBodySize(req.body);
 
-    const endpointConfig = providersConfig.endpoints[req.path];
-    if (!endpointConfig || !endpointConfig.models) {
-        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
-    }
+        if (!providersConfig || !providersConfig.endpoints) {
+            throw new ConfigurationError('Provider configuration is missing or invalid.');
+        }
 
-    const requestedModel = req.body.model;
-    if (!requestedModel) {
-        return res.status(400).json({ error: "Missing 'model' field in request body." });
-    }
+        const endpointConfig = providersConfig.endpoints[req.path];
+        if (!endpointConfig || !endpointConfig.models) {
+            throw new ConfigurationError(`Configuration missing for endpoint: ${req.path}`);
+        }
+
+        const requestedModel = req.body.model;
+        if (!requestedModel) {
+            throw new ValidationError("Missing 'model' field in request body.");
+        }
+
+        // Validate model name
+        securityValidator.validateModelName(requestedModel);
+
+        // Validate prompt content if present
+        if (req.body.messages && Array.isArray(req.body.messages)) {
+            for (const message of req.body.messages) {
+                if (message.content && typeof message.content === 'string') {
+                    securityValidator.validatePrompt(message.content);
+                }
+            }
+        }
 
     let estimatedInputContentTokens = 0;
     try {
@@ -977,23 +964,45 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
         responsePayload.last_provider_error_body = lastErrorBody;
     }
     res.status(502).json(responsePayload);
-});
-
-app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
-
-    if (!providersConfig || !providersConfig.endpoints) {
-        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    } catch (error) {
+        // Log error
+        await securityAuditLogger.logError('api_request', error, req.authenticatedApiKey, req);
+        throw error;
     }
+}));
 
-    const endpointConfig = providersConfig.endpoints[req.path];
-    if (!endpointConfig || !endpointConfig.models) {
-        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
-    }
+app.post('/v1/images/generations', authenticateRequest, asyncHandler(async (req, res) => {
+    try {
+        // Log authentication attempt
+        await securityAuditLogger.logAuthenticationEvent('api_request', {
+            endpoint: req.path,
+            method: req.method
+        }, req);
 
-    const requestedModel = req.body.model;
-    if (!requestedModel) {
-        return res.status(400).json({ error: "Missing 'model' field in request body." });
-    }
+        // Validate request body size
+        securityValidator.validateRequestBodySize(req.body);
+
+        if (!providersConfig || !providersConfig.endpoints) {
+            throw new ConfigurationError('Provider configuration is missing or invalid.');
+        }
+
+        const endpointConfig = providersConfig.endpoints[req.path];
+        if (!endpointConfig || !endpointConfig.models) {
+            throw new ConfigurationError(`Configuration missing for endpoint: ${req.path}`);
+        }
+
+        const requestedModel = req.body.model;
+        if (!requestedModel) {
+            throw new ValidationError("Missing 'model' field in request body.");
+        }
+
+        // Validate model name
+        securityValidator.validateModelName(requestedModel);
+
+        // Validate prompt content if present
+        if (req.body.prompt && typeof req.body.prompt === 'string') {
+            securityValidator.validatePrompt(req.body.prompt);
+        }
 
     const providers = endpointConfig.models[requestedModel];
     if (!providers) {
@@ -1169,26 +1178,51 @@ app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
         responsePayload.last_provider_error_body = lastErrorBody;
     }
     res.status(502).json(responsePayload);
-});
-
-app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'), async (req, res) => {
-    if (!req.file) {
-        return res.status(400).json({ error: "Missing file for transcription." });
+    } catch (error) {
+        // Log error
+        await securityAuditLogger.logError('api_request', error, req.authenticatedApiKey, req);
+        throw error;
     }
+}));
 
-    if (!providersConfig || !providersConfig.endpoints) {
-        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
-    }
+app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'), asyncHandler(async (req, res) => {
+    try {
+        // Log authentication attempt
+        await securityAuditLogger.logAuthenticationEvent('api_request', {
+            endpoint: req.path,
+            method: req.method
+        }, req);
 
-    const endpointConfig = providersConfig.endpoints[req.path];
-    if (!endpointConfig || !endpointConfig.models) {
-        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
-    }
+        // Validate request body size
+        securityValidator.validateRequestBodySize(req.body);
 
-    const requestedModel = req.body.model;
-    if (!requestedModel) {
-        return res.status(400).json({ error: "Missing 'model' field in request body." });
-    }
+        if (!req.file) {
+            throw new ValidationError("Missing file for transcription.");
+        }
+
+        // Validate file upload
+        securityValidator.validateFile(req.file, {
+            maxSize: 25 * 1024 * 1024, // 25MB
+            allowedTypes: ['audio/mpeg', 'audio/wav', 'audio/mp3', 'audio/x-wav'],
+            allowedExtensions: ['mp3', 'wav', 'm4a']
+        });
+
+        if (!providersConfig || !providersConfig.endpoints) {
+            throw new ConfigurationError('Provider configuration is missing or invalid.');
+        }
+
+        const endpointConfig = providersConfig.endpoints[req.path];
+        if (!endpointConfig || !endpointConfig.models) {
+            throw new ConfigurationError(`Configuration missing for endpoint: ${req.path}`);
+        }
+
+        const requestedModel = req.body.model;
+        if (!requestedModel) {
+            throw new ValidationError("Missing 'model' field in request body.");
+        }
+
+        // Validate model name
+        securityValidator.validateModelName(requestedModel);
 
     const providers = endpointConfig.models[requestedModel];
     if (!providers) {
@@ -1382,22 +1416,45 @@ app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'),
         responsePayload.last_provider_error_body = lastErrorBody;
     }
     res.status(502).json(responsePayload);
-});
-
-app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
-    if (!providersConfig || !providersConfig.endpoints) {
-        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    } catch (error) {
+        // Log error
+        await securityAuditLogger.logError('api_request', error, req.authenticatedApiKey, req);
+        throw error;
     }
+}));
 
-    const endpointConfig = providersConfig.endpoints[req.path];
-    if (!endpointConfig || !endpointConfig.models) {
-        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
-    }
+app.post('/v1/audio/speech', authenticateRequest, asyncHandler(async (req, res) => {
+    try {
+        // Log authentication attempt
+        await securityAuditLogger.logAuthenticationEvent('api_request', {
+            endpoint: req.path,
+            method: req.method
+        }, req);
 
-    const requestedModel = req.body.model;
-    if (!requestedModel) {
-        return res.status(400).json({ error: "Missing 'model' field in request body." });
-    }
+        // Validate request body size
+        securityValidator.validateRequestBodySize(req.body);
+
+        if (!providersConfig || !providersConfig.endpoints) {
+            throw new ConfigurationError('Provider configuration is missing or invalid.');
+        }
+
+        const endpointConfig = providersConfig.endpoints[req.path];
+        if (!endpointConfig || !endpointConfig.models) {
+            throw new ConfigurationError(`Configuration missing for endpoint: ${req.path}`);
+        }
+
+        const requestedModel = req.body.model;
+        if (!requestedModel) {
+            throw new ValidationError("Missing 'model' field in request body.");
+        }
+
+        // Validate model name
+        securityValidator.validateModelName(requestedModel);
+
+        // Validate input text if present
+        if (req.body.input && typeof req.body.input === 'string') {
+            securityValidator.validatePrompt(req.body.input);
+        }
 
     const providers = endpointConfig.models[requestedModel];
     if (!providers) {
@@ -1592,25 +1649,48 @@ app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
         responsePayload.last_provider_error_body = lastErrorBody;
     }
     res.status(502).json(responsePayload);
-});
-
-app.post('/v1/responses', authenticateRequest, async (req, res) => {
-    if (!providersConfig || !providersConfig.endpoints) {
-        return res.status(500).json({ error: "Provider configuration is missing or invalid." });
+    } catch (error) {
+        // Log error
+        await securityAuditLogger.logError('api_request', error, req.authenticatedApiKey, req);
+        throw error;
     }
+}));
 
-    const endpointConfig = providersConfig.endpoints[req.path];
-    if (!endpointConfig || !endpointConfig.models) {
-        return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
-    }
+app.post('/v1/responses', authenticateRequest, asyncHandler(async (req, res) => {
+    try {
+        // Log authentication attempt
+        await securityAuditLogger.logAuthenticationEvent('api_request', {
+            endpoint: req.path,
+            method: req.method
+        }, req);
 
-    const requestedModel = req.body.model;
-    if (!requestedModel) {
-        return res.status(400).json({ error: "Missing 'model' field in request body." });
-    }
+        // Validate request body size
+        securityValidator.validateRequestBodySize(req.body);
+
+        if (!providersConfig || !providersConfig.endpoints) {
+            throw new ConfigurationError('Provider configuration is missing or invalid.');
+        }
+
+        const endpointConfig = providersConfig.endpoints[req.path];
+        if (!endpointConfig || !endpointConfig.models) {
+            throw new ConfigurationError(`Configuration missing for endpoint: ${req.path}`);
+        }
+
+        const requestedModel = req.body.model;
+        if (!requestedModel) {
+            throw new ValidationError("Missing 'model' field in request body.");
+        }
+
+        // Validate model name
+        securityValidator.validateModelName(requestedModel);
+
+        // Validate input if present
+        if (req.body.input && typeof req.body.input === 'string') {
+            securityValidator.validatePrompt(req.body.input);
+        }
     
     if (!req.body.input) {
-        return res.status(400).json({ error: "Missing 'input' field in request body for /v1/responses endpoint." });
+        throw new ValidationError("Missing 'input' field in request body for /v1/responses endpoint.");
     }
 
     const providers = endpointConfig.models[requestedModel];
@@ -1832,13 +1912,18 @@ app.post('/v1/responses', authenticateRequest, async (req, res) => {
         responsePayload.last_provider_error_body = lastErrorBody;
     }
     res.status(502).json(responsePayload);
-});
+    } catch (error) {
+        // Log error
+        await securityAuditLogger.logError('api_request', error, req.authenticatedApiKey, req);
+        throw error;
+    }
+}));
 
 /**
  * POST /admin/keys
  * Manages user API keys: add, enable, disable, change plan, reset key. Requires ADMIN_API_KEY.
  */
-app.post('/admin/keys', async (req, res) => {
+app.post('/admin/keys', asyncHandler(async (req, res) => {
     const authHeader = req.headers.authorization;
     let providedApiKey = null;
     if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -1846,136 +1931,129 @@ app.post('/admin/keys', async (req, res) => {
     }
 
     if (providedApiKey !== ADMIN_API_KEY) {
-        return res.status(403).json({ error: "Forbidden: Invalid admin API key." });
+        throw new SecurityError('Forbidden: Invalid admin API key.', 403);
     }
 
+    const { action, api_key: targetApiKey, username, plan: newPlan, user_id } = req.body;
+
+    if (!action || !targetApiKey) {
+        throw new ValidationError("Missing 'action' or 'api_key' in ExoML Router admin request body.");
+    }
+
+
+    let currentUsersConfig;
     try {
-        const { action, api_key: targetApiKey, username, plan: newPlan, user_id } = req.body;
-
-        if (!action || !targetApiKey) {
-            return res.status(400).json({ error: "Missing 'action' or 'api_key' in ExoML Router admin request body." });
-        }
-
-
-        let currentUsersConfig;
-        try {
-            const data = await readFileAsync(USERS_CONFIG_FILE, 'utf8');
-            currentUsersConfig = JSON.parse(data);
-        } catch (e) {
-            if (e.code === 'ENOENT') {
-                currentUsersConfig = { users: {} };
-            } else if (e instanceof SyntaxError) {
-                currentUsersConfig = usersConfig;
-            } else {
-                currentUsersConfig = usersConfig;
-            }
-        }
-        let usersDict = currentUsersConfig.users;
-        let configChanged = false;
-        const validPlans = ["0", "500k", "100m", "unlimited"];
-
-        switch (action) {
-            case 'add':
-                if (!username) {
-                    return res.status(400).json({ error: "Missing 'username' for 'add' action." });
-                }
-                const planToAdd = newPlan || "0";
-                if (!validPlans.includes(planToAdd)) {
-                    return res.status(400).json({ error: `Invalid plan '${planToAdd}'. Valid plans: ${validPlans}` });
-                }
-                if (usersDict[targetApiKey]) {
-                    return res.status(409).json({ error: `API key ...${targetApiKey.slice(-4)} already exists.` });
-                }
-
-                usersDict[targetApiKey] = {
-                    username: username,
-                    user_id: user_id,
-                    plan: planToAdd,
-                    enabled: true,
-                    total_tokens: 0,
-                    daily_tokens_used: 0,
-                    last_usage_timestamp: null,
-                    last_updated_timestamp: Math.floor(Date.now() / 1000)
-                };
-                configChanged = true;
-                res.status(201).json({ message: `User '${username}' added successfully with key ${targetApiKey}.` });
-                break;
-
-            case 'enable':
-            case 'disable':
-                const user_data_status = usersDict[targetApiKey];
-                if (!user_data_status) {
-                    return res.status(404).json({ error: `API key ...${targetApiKey.slice(-4)} not found.` });
-                }
-                const newStatus = (action === 'enable');
-                if (user_data_status.enabled === newStatus) {
-                    return res.status(200).json({ message: `API key ...${targetApiKey.slice(-4)} is already ${action}d.` });
-                }
-                user_data_status.enabled = newStatus;
-                user_data_status.last_updated_timestamp = Math.floor(Date.now() / 1000);
-                configChanged = true;
-                res.status(200).json({ message: `API key ...${targetApiKey.slice(-4)} has been ${action}d.` });
-                break;
-
-            case 'change_plan':
-                const user_data_plan = usersDict[targetApiKey];
-                if (!user_data_plan) {
-                    return res.status(404).json({ error: `API key ...${targetApiKey.slice(-4)} not found.` });
-                }
-                if (!newPlan) {
-                    return res.status(400).json({ error: "Missing 'new_plan' parameter for 'change_plan' action." });
-                }
-                if (!validPlans.includes(newPlan)) {
-                    return res.status(400).json({ error: `Invalid plan '${newPlan}'. Valid plans: ${validPlans}` });
-                }
-                const oldPlan = user_data_plan.plan || 'N/A';
-                if (oldPlan === newPlan) {
-                    return res.status(200).json({ message: `API key ...${targetApiKey.slice(-4)} already has plan '${newPlan}'.` });
-                }
-                user_data_plan.plan = newPlan;
-                user_data_plan.last_updated_timestamp = Math.floor(Date.now() / 1000);
-                configChanged = true;
-                res.status(200).json({ message: `Plan for API key ...${targetApiKey.slice(-4)} changed from '${oldPlan}' to '${newPlan}'.` });
-                break;
-
-            case 'resetkey':
-                const user_data_reset = usersDict[targetApiKey];
-                if (!user_data_reset) {
-                    return res.status(404).json({ error: `API key ...${targetApiKey.slice(-4)} not found.` });
-                }
-                const crypto = require('crypto');
-                let newKey = `sk-${crypto.randomBytes(24).toString('hex')}`;
-
-                while (usersDict[newKey]) {
-                    newKey = `sk-${crypto.randomBytes(24).toString('hex')}`;
-                }
-
-                usersDict[newKey] = user_data_reset;
-                delete usersDict[targetApiKey];
-                configChanged = true;
-                res.status(200).json({ message: `Key for user '${user_data_reset.username || 'Unknown'}' reset successfully.`, new_api_key: newKey });
-                break;
-
-            default:
-                return res.status(400).json({ error: `Invalid ExoML Router admin action: ${action}. Valid actions: add, enable, disable, change_plan, resetkey.` });
-        }
-
-        if (configChanged) {
-            if (!(await saveUsersConfig(currentUsersConfig))) {
-            } else {
-                usersConfig = currentUsersConfig;
-            }
-        } else {
-        }
-
+        const data = await readFileAsync(USERS_CONFIG_FILE, 'utf8');
+        currentUsersConfig = JSON.parse(data);
     } catch (e) {
-        if (e instanceof SyntaxError) {
-            res.status(400).json({ error: "Invalid JSON in ExoML Router admin request body." });
+        if (e.code === 'ENOENT') {
+            currentUsersConfig = { users: {} };
+        } else if (e instanceof SyntaxError) {
+            currentUsersConfig = usersConfig;
         } else {
-            res.status(500).json({ error: `Internal server error processing ExoML Router admin POST request: ${e.message}` });
+            currentUsersConfig = usersConfig;
         }
     }
-});
+    let usersDict = currentUsersConfig.users;
+    let configChanged = false;
+    const validPlans = ["0", "500k", "100m", "unlimited"];
+
+    switch (action) {
+        case 'add':
+            if (!username) {
+                throw new ValidationError("Missing 'username' for 'add' action.");
+            }
+            const planToAdd = newPlan || "0";
+            if (!validPlans.includes(planToAdd)) {
+                throw new ValidationError(`Invalid plan '${planToAdd}'. Valid plans: ${validPlans}`);
+            }
+            if (usersDict[targetApiKey]) {
+                throw new ConflictError(`API key ...${targetApiKey.slice(-4)} already exists.`);
+            }
+
+            usersDict[targetApiKey] = {
+                username: username,
+                user_id: user_id,
+                plan: planToAdd,
+                enabled: true,
+                total_tokens: 0,
+                daily_tokens_used: 0,
+                last_usage_timestamp: null,
+                last_updated_timestamp: Math.floor(Date.now() / 1000)
+            };
+            configChanged = true;
+            res.status(201).json({ message: `User '${username}' added successfully with key ${targetApiKey}.` });
+            break;
+
+        case 'enable':
+        case 'disable':
+            const user_data_status = usersDict[targetApiKey];
+            if (!user_data_status) {
+                throw new NotFoundError(`API key ...${targetApiKey.slice(-4)} not found.`);
+            }
+            const newStatus = (action === 'enable');
+            if (user_data_status.enabled === newStatus) {
+                res.status(200).json({ message: `API key ...${targetApiKey.slice(-4)} is already ${action}d.` });
+                return;
+            }
+            user_data_status.enabled = newStatus;
+            user_data_status.last_updated_timestamp = Math.floor(Date.now() / 1000);
+            configChanged = true;
+            res.status(200).json({ message: `API key ...${targetApiKey.slice(-4)} has been ${action}d.` });
+            break;
+
+        case 'change_plan':
+            const user_data_plan = usersDict[targetApiKey];
+            if (!user_data_plan) {
+                throw new NotFoundError(`API key ...${targetApiKey.slice(-4)} not found.`);
+            }
+            if (!newPlan) {
+                throw new ValidationError("Missing 'new_plan' parameter for 'change_plan' action.");
+            }
+            if (!validPlans.includes(newPlan)) {
+                throw new ValidationError(`Invalid plan '${newPlan}'. Valid plans: ${validPlans}`);
+            }
+            const oldPlan = user_data_plan.plan || 'N/A';
+            if (oldPlan === newPlan) {
+                res.status(200).json({ message: `API key ...${targetApiKey.slice(-4)} already has plan '${newPlan}'.` });
+                return;
+            }
+            user_data_plan.plan = newPlan;
+            user_data_plan.last_updated_timestamp = Math.floor(Date.now() / 1000);
+            configChanged = true;
+            res.status(200).json({ message: `Plan for API key ...${targetApiKey.slice(-4)} changed from '${oldPlan}' to '${newPlan}'.` });
+            break;
+
+        case 'resetkey':
+            const user_data_reset = usersDict[targetApiKey];
+            if (!user_data_reset) {
+                throw new NotFoundError(`API key ...${targetApiKey.slice(-4)} not found.`);
+            }
+            const crypto = require('crypto');
+            let newKey = `sk-${crypto.randomBytes(24).toString('hex')}`;
+
+            while (usersDict[newKey]) {
+                newKey = `sk-${crypto.randomBytes(24).toString('hex')}`;
+            }
+
+            usersDict[newKey] = user_data_reset;
+            delete usersDict[targetApiKey];
+            configChanged = true;
+            res.status(200).json({ message: `Key for user '${user_data_reset.username || 'Unknown'}' reset successfully.`, new_api_key: newKey });
+            break;
+
+        default:
+            throw new ValidationError(`Invalid ExoML Router admin action: ${action}. Valid actions: add, enable, disable, change_plan, resetkey.`);
+    }
+
+    if (configChanged) {
+        if (!(await saveUsersConfig(currentUsersConfig))) {
+            throw new Error('Failed to save user configuration.');
+        } else {
+            usersConfig = currentUsersConfig;
+        }
+    }
+}));
 
 
 
@@ -1983,43 +2061,39 @@ app.post('/admin/keys', async (req, res) => {
  * GET /
  * Serves the main index.html page, injecting the total processed tokens.
  */
-app.get('/', async (req, res) => {
-    try {
-        let totalTokens = 0;
-        if (usersConfig && usersConfig.users) {
-            for (const userKey in usersConfig.users) {
-                const userData = usersConfig.users[userKey];
-                const userTokens = userData.total_tokens || 0;
-                if (typeof userTokens === 'number') {
-                    totalTokens += userTokens;
-                } else {
-                }
+app.get('/', asyncHandler(async (req, res) => {
+    let totalTokens = 0;
+    if (usersConfig && usersConfig.users) {
+        for (const userKey in usersConfig.users) {
+            const userData = usersConfig.users[userKey];
+            const userTokens = userData.total_tokens || 0;
+            if (typeof userTokens === 'number') {
+                totalTokens += userTokens;
+            } else {
             }
         }
-
-        const formattedTotalTokens = totalTokens.toLocaleString();
-        const indexPath = path.join(STATIC_DIRECTORY, 'index.html');
-        let htmlContent;
-        try {
-            htmlContent = await readFileAsync(indexPath, 'utf8');
-        } catch (e) {
-            if (e.code === 'ENOENT') {
-                return res.status(404).send("File Not Found: index.html");
-            }
-            throw e;
-        }
-
-        const modifiedHtmlContent = htmlContent.replace('<!-- TOTAL_TOKENS -->', formattedTotalTokens);
-
-        res.status(200).setHeader("Content-Type", "text/html; charset=utf-8")
-                       .setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
-                       .setHeader("Pragma", "no-cache")
-                       .setHeader("Expires", "0")
-                       .send(modifiedHtmlContent);
-    } catch (e) {
-        res.status(500).send("ExoML Router: Internal Server Error serving index.html");
     }
-});
+
+    const formattedTotalTokens = totalTokens.toLocaleString();
+    const indexPath = path.join(STATIC_DIRECTORY, 'index.html');
+    let htmlContent;
+    try {
+        htmlContent = await readFileAsync(indexPath, 'utf8');
+    } catch (e) {
+        if (e.code === 'ENOENT') {
+            throw new NotFoundError("File Not Found: index.html");
+        }
+        throw e;
+    }
+
+    const modifiedHtmlContent = htmlContent.replace('<!-- TOTAL_TOKENS -->', formattedTotalTokens);
+
+    res.status(200).setHeader("Content-Type", "text/html; charset=utf-8")
+                   .setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+                   .setHeader("Pragma", "no-cache")
+                   .setHeader("Expires", "0")
+                   .send(modifiedHtmlContent);
+}));
 
 /**
  * GET /favicon.png
@@ -2033,16 +2107,15 @@ app.get('/favicon.png', (req, res) => {
  * GET /chat
  * Serves a chat interface page (chat.html). Creates a placeholder if the file doesn't exist.
  */
-app.get('/chat', async (req, res) => {
-    try {
-        const chatPagePath = path.join(STATIC_DIRECTORY, 'chat.html');
-        let htmlContent;
+app.get('/chat', asyncHandler(async (req, res) => {
+    const chatPagePath = path.join(STATIC_DIRECTORY, 'chat.html');
+    let htmlContent;
 
-        try {
-            htmlContent = await readFileAsync(chatPagePath, 'utf8');
-        } catch (e) {
-            if (e.code === 'ENOENT') {
-                const placeholderContent = `<!DOCTYPE html>
+    try {
+        htmlContent = await readFileAsync(chatPagePath, 'utf8');
+    } catch (e) {
+        if (e.code === 'ENOENT') {
+            const placeholderContent = `<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -2063,22 +2136,19 @@ app.get('/chat', async (req, res) => {
 </body>
 </html>
 `;
-                await writeFileAsync(chatPagePath, placeholderContent);
-                htmlContent = placeholderContent;
-            } else {
-                throw e;
-            }
+            await writeFileAsync(chatPagePath, placeholderContent);
+            htmlContent = placeholderContent;
+        } else {
+            throw e;
         }
-
-        res.status(200).setHeader("Content-Type", "text/html; charset=utf-8")
-                       .setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
-                       .setHeader("Pragma", "no-cache")
-                       .setHeader("Expires", "0")
-                       .send(htmlContent);
-    } catch (e) {
-        res.status(500).send("ExoML Router: Internal Server Error serving chat.html");
     }
-});
+
+    res.status(200).setHeader("Content-Type", "text/html; charset=utf-8")
+                   .setHeader("Cache-Control", "no-cache, no-store, must-revalidate")
+                   .setHeader("Pragma", "no-cache")
+                   .setHeader("Expires", "0")
+                   .send(htmlContent);
+}));
 
 
 /**
@@ -2166,6 +2236,10 @@ if (securityConfig.enableApiKeyRotation) {
 }
 
 startServer();
+
+// Error handling middleware (must be last)
+app.use(notFoundHandler);
+app.use(errorHandler);
 
 process.on('SIGINT', () => {
     if (server) {

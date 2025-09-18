@@ -1,0 +1,118 @@
+{
+  "authentication": {
+    "enabled": true,
+    "method": "api_key",
+    "apiKeyHeader": "X-API-Key",
+    "authHeader": "Authorization",
+    "tokenPrefix": "Bearer ",
+    "enableApiKeyRotation": false,
+    "apiKeyRotationInterval": 2592000000,
+    "enableApiKeyExpiry": true,
+    "defaultExpiryDays": 30
+  },
+  "rateLimiting": {
+    "enabled": true,
+    "windowMs": 900000,
+    "maxRequests": 100,
+    "skipSuccessfulRequests": false,
+    "skipFailedRequests": false,
+    "trustProxy": true
+  },
+  "cors": {
+    "enabled": true,
+    "origin": ["*"],
+    "methods": ["GET", "POST", "OPTIONS"],
+    "allowedHeaders": ["Content-Type", "Authorization", "X-Requested-With", "X-API-Key"],
+    "exposedHeaders": ["Content-Length", "X-Powered-By", "X-RateLimit-Limit", "X-RateLimit-Remaining"],
+    "credentials": true,
+    "maxAge": 86400,
+    "preflightContinue": false
+  },
+  "securityHeaders": {
+    "enabled": true,
+    "contentSecurityPolicy": {
+      "enabled": true,
+      "directives": {
+        "defaultSrc": ["'self'"],
+        "scriptSrc": ["'self'", "'unsafe-inline'"],
+        "styleSrc": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+        "fontSrc": ["'self'", "https://fonts.gstatic.com"],
+        "imgSrc": ["'self'", "data:", "https:"],
+        "connectSrc": ["'self'", "http:", "https:"],
+        "mediaSrc": ["'self'", "data:", "https:"],
+        "objectSrc": ["'none'"],
+        "childSrc": ["'self'"],
+        "workerSrc": ["'self'"],
+        "frameSrc": ["'self'"],
+        "frameAncestors": ["'none'"]
+      }
+    },
+    "xssProtection": true,
+    "frameguard": { "action": "deny" },
+    "hsts": {
+      "enabled": true,
+      "maxAge": 31536000,
+      "includeSubDomains": true,
+      "preload": true
+    },
+    "hidePoweredBy": true
+  },
+  "logging": {
+    "enabled": true,
+    "level": "info",
+    "requests": true,
+    "errors": true,
+    "securityEvents": true,
+    "audit": false,
+    "path": "./logs"
+  },
+  "inputValidation": {
+    "enabled": true,
+    "strict": true,
+    "maxSize": "10mb",
+    "sanitizeInputs": true
+  },
+  "ddosProtection": {
+    "enabled": true,
+    "maxConnectionsPerIP": 20,
+    "timeout": 30000,
+    "trustProxy": true
+  },
+  "apiKeyManagement": {
+    "enableExpiry": true,
+    "defaultExpiryDays": 30,
+    "enableScopes": false,
+    "enableRotation": false,
+    "rotationInterval": 2592000000
+  },
+  "endpoints": {
+    "/v1/chat/completions": {
+      "rateLimit": {
+        "windowMs": 900000,
+        "maxRequests": 50
+      },
+      "maxRequestSize": "10mb"
+    },
+    "/v1/images/generations": {
+      "rateLimit": {
+        "windowMs": 3600000,
+        "maxRequests": 10
+      },
+      "maxRequestSize": "4mb"
+    },
+    "/v1/audio/transcriptions": {
+      "rateLimit": {
+        "windowMs": 3600000,
+        "maxRequests": 20
+      },
+      "maxRequestSize": "25mb"
+    },
+    "/v1/responses": {
+      "rateLimit": {
+        "windowMs": 900000,
+        "maxRequests": 50
+      },
+      "maxRequestSize": "10mb"
+    }
+  }
+}

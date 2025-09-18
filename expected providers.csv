@@ -1,0 +1,16 @@
+Name,Base_URL,Full_Endpoint,Models_List_Endpoint,APIKey,ignore this column,Rate_Limit,Notes
+NoAuth_Pollinations_Text,https://text.pollinations.ai,https://text.pollinations.ai/{prompt},https://text.pollinations.ai/models,No,✅ VERIFIED,15 sec intervals (anonymous),Free with rate limits
+NoAuth_Pollinations_Image,https://image.pollinations.ai,https://image.pollinations.ai/prompt/{prompt},https://image.pollinations.ai/models,No,✅ VERIFIED,15 sec intervals (anonymous),Free with rate limits
+OpenRouter,https://openrouter.ai,https://openrouter.ai/api/v1/chat/completions,https://openrouter.ai/api/v1/models,Yes,✅ VERIFIED,Variable by tier,Unified API for multiple models
+ImageRouter,https://api.imagerouter.io,https://api.imagerouter.io/v1/openai/images/generations,https://api.imagerouter.io/v1/models,Yes,✅ VERIFIED,6 requests/second,Image generation only
+Pollinations_Text,https://text.pollinations.ai,https://text.pollinations.ai/{prompt},https://text.pollinations.ai/models,Yes,✅ VERIFIED,5-15 sec intervals,Faster with API key
+Pollinations_Image,https://image.pollinations.ai,https://image.pollinations.ai/prompt/{prompt},https://image.pollinations.ai/models,Yes,✅ VERIFIED,5-15 sec intervals,Faster with API key
+GitHub_Models,https://models.github.ai,https://models.github.ai/inference/chat/completions,https://models.github.ai/catalog/models,Yes,⚠️ URGENT UPDATE,Variable by tier,MUST UPDATE - Azure endpoint deprecated Oct 17 2025
+Zuki_Journey,https://api.zukijourney.com,https://api.zukijourney.com/v1/chat/completions,https://api.zukijourney.com/v1/models,Yes,🔍 NEEDS TESTING,Unknown,Standard OpenAI format
+HelixMind,https://helixmind.online,https://helixmind.online/v1/chat/completions,https://helixmind.online/v1/models,Yes,🔍 NEEDS TESTING,100 requests/day,Standard OpenAI format
+VoidAI,https://api.voidai.app,https://api.voidai.app/v1/chat/completions,https://api.voidai.app/v1/models,Yes,🔍 NEEDS TESTING,125000 daily credits,Standard OpenAI format
+MNNAI,https://api.mnnai.ru,https://api.mnnai.ru/v1/chat/completions,https://api.mnnai.ru/v1/models,Yes,🔍 NEEDS TESTING,Unknown,Has free models (0.01 cost)
+Z.ai,https://api.z.ai,https://api.z.ai/api/paas/v4/chat/completions,https://api.z.ai/api/paas/v4/models,Yes,🔍 NEEDS TESTING,Concurrency limit of 2,GLM models
+Bigmodel.cn,https://open.bigmodel.cn,https://open.bigmodel.cn/api/paas/v4/chat/completions,https://open.bigmodel.cn/api/paas/v4/models,Yes,🔍 NEEDS TESTING,Concurrency limit of 2,GLM models
+ElectronHub,https://api.electronhub.ai,https://api.electronhub.ai/v1/chat/completions,https://api.electronhub.ai/v1/models,Yes,🔍 NEEDS TESTING,7 requests per minute,Standard OpenAI format
+NavyAI,https://api.navy,https://api.navy/v1/chat/completions,https://api.navy/v1/models,Yes,🔍 NEEDS TESTING,800000 tokens free per day,Standard OpenAI format
