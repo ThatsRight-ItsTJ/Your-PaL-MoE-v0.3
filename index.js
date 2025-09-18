@@ -1,4 +1,3 @@
-
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -628,21 +627,13 @@ app.get('/v1/usage', async (req, res) => {
  */
 app.post('/v1/*', authenticateRequest, async (req, res) => {
 
-    console.log("[DEBUG] Route handler triggered for:", req.path);
     if (!providersConfig || !providersConfig.endpoints) {
         return res.status(500).json({ error: "Provider configuration is missing or invalid." });
     }
 
     const endpointConfig = providersConfig.endpoints[req.path];
-    console.log("[DEBUG] providersConfig.endpoints keys:", Object.keys(providersConfig.endpoints));
-    console.log("[DEBUG] endpointConfig:", JSON.stringify(endpointConfig, null, 2));
-    if (!endpointConfig) {
-        console.log("[DEBUG] endpointConfig is undefined or null");
+    if (!endpointConfig || !endpointConfig.models) {
         return res.status(400).json({ error: `Configuration missing for endpoint: ${req.path}` });
-    }
-    if (!endpointConfig.models || Object.keys(endpointConfig.models).length === 0) {
-        console.log("[DEBUG] endpointConfig.models is undefined or empty");
-        return res.status(400).json({ error: `No models configured for endpoint: ${req.path}` });
     }
 
     const requestedModel = req.body.model;
@@ -690,8 +681,8 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
             // Check if model is marked as free
             if (provider.metadata && provider.metadata.raw) {
                 // Check is_free flag first
-                if (typeof provider.metadata.is_free === 'boolean') {
-                    return provider.metadata.is_free;
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
                 }
                 // Check premium_model flag
                 if (typeof provider.metadata.raw.premium_model === 'boolean') {
@@ -759,7 +750,9 @@ app.post('/v1/*', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
+        const targetUrl = baseUrl.includes("/api/openai") ? 
+            `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '')}` : 
+            `${baseUrl.replace(/\/+$/, '')}${req.path}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -1026,8 +1019,8 @@ app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
             // Check if model is marked as free
             if (provider.metadata && provider.metadata.raw) {
                 // Check is_free flag first
-                if (typeof provider.metadata.is_free === 'boolean') {
-                    return provider.metadata.is_free;
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
                 }
                 // Check premium_model flag
                 if (typeof provider.metadata.raw.premium_model === 'boolean') {
@@ -1093,7 +1086,9 @@ app.post('/v1/images/generations', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
+        const targetUrl = baseUrl.includes("/api/openai") ? 
+            `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '')}` : 
+            `${baseUrl.replace(/\/+$/, '')}${req.path}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -1219,8 +1214,8 @@ app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'),
             // Check if model is marked as free
             if (provider.metadata && provider.metadata.raw) {
                 // Check is_free flag first
-                if (typeof provider.metadata.is_free === 'boolean') {
-                    return provider.metadata.is_free;
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
                 }
                 // Check premium_model flag
                 if (typeof provider.metadata.raw.premium_model === 'boolean') {
@@ -1286,7 +1281,9 @@ app.post('/v1/audio/transcriptions', authenticateRequest, upload.single('file'),
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
+        const targetUrl = baseUrl.includes("/api/openai") ? 
+            `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '')}` : 
+            `${baseUrl.replace(/\/+$/, '')}${req.path}`;
         
         const formData = new FormData();
         formData.append('file', req.file.buffer, { filename: req.file.originalname, contentType: req.file.mimetype });
@@ -1426,8 +1423,8 @@ app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
             // Check if model is marked as free
             if (provider.metadata && provider.metadata.raw) {
                 // Check is_free flag first
-                if (typeof provider.metadata.is_free === 'boolean') {
-                    return provider.metadata.is_free;
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
                 }
                 // Check premium_model flag
                 if (typeof provider.metadata.raw.premium_model === 'boolean') {
@@ -1506,7 +1503,9 @@ app.post('/v1/audio/speech', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
+        const targetUrl = baseUrl.includes("/api/openai") ? 
+            `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '')}` : 
+            `${baseUrl.replace(/\/+$/, '')}${req.path}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
@@ -1638,8 +1637,8 @@ app.post('/v1/responses', authenticateRequest, async (req, res) => {
             // Check if model is marked as free
             if (provider.metadata && provider.metadata.raw) {
                 // Check is_free flag first
-                if (typeof provider.metadata.is_free === 'boolean') {
-                    return provider.metadata.is_free;
+                if (typeof provider.metadata.raw.is_free === 'boolean') {
+                    return provider.metadata.raw.is_free;
                 }
                 // Check premium_model flag
                 if (typeof provider.metadata.raw.premium_model === 'boolean') {
@@ -1718,7 +1717,9 @@ app.post('/v1/responses', authenticateRequest, async (req, res) => {
             continue;
         }
 
-        const targetUrl = `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '/')}`;
+        const targetUrl = baseUrl.includes("/api/openai") ? 
+            `${baseUrl.replace(/\/+$/, '')}${req.path.replace(/^\/v1\//, '')}` : 
+            `${baseUrl.replace(/\/+$/, '')}${req.path}`;
 
         const newRequestBody = { ...req.body, model: model };
         const requestBodyBuffer = Buffer.from(JSON.stringify(newRequestBody), 'utf-8');
