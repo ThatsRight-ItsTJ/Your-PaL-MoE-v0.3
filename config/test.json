@@ -1,0 +1,13 @@
+{
+  "name": "test",
+  "base_url": "https://api.test.com",
+  "api_key": null,
+  "priority": 99,
+  "token_multiplier": 1,
+  "rate_limit": {},
+  "auth": {},
+  "metadata": {},
+  "status": "active",
+  "last_updated": "2025-10-15T02:10:07.890Z",
+  "custom_config": {}
+}

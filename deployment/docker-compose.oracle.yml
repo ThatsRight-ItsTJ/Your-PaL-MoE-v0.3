@@ -1,0 +1,301 @@
+version: '3.8'
+
+services:
+  pal-moe-app:
+    image: pal-moe:latest
+    platform: linux/arm64
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile.oracle
+    container_name: pal-moe-oracle
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NODE_OPTIONS=--max-old-space-size=18GB --max-semi-space-size=512MB --expose-gc
+      - UV_THREADPOOL_SIZE=4
+      - CLUSTER_WORKERS=2
+      - CACHE_SIZE=4GB
+      - BUFFER_POOL_SIZE=2GB
+      - OCI_REGION=${OCI_REGION:-us-ashburn-1}
+      - ORACLE_CLOUD=true
+      - PORT=3000
+      - HEALTH_PORT=8080
+      - METRICS_PORT=9090
+    ports:
+      - "80:3000"    # HTTP
+      - "443:3000"   # HTTPS (if SSL termination handled externally)
+      - "8080:8080"  # Health checks
+      - "9090:9090"  # Metrics
+    volumes:
+      - ./logs:/app/logs:rw
+      - ./backups:/app/backups:rw
+      - ./temp:/app/temp:rw
+      - oracle-block-volume:/app/data:rw
+    networks:
+      - pal-moe-network
+    depends_on:
+      - redis
+      - postgres
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '4.0'
+          memory: 20GB
+        reservations:
+          cpus: '2.0'
+          memory: 16GB
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+        max_attempts: 3
+        window: 120s
+
+  redis:
+    image: redis:7-alpine
+    platform: linux/arm64
+    container_name: pal-moe-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 4gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    networks:
+      - pal-moe-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 4GB
+        reservations:
+          cpus: '0.5'
+          memory: 2GB
+
+  postgres:
+    image: postgres:15-alpine
+    platform: linux/arm64
+    container_name: pal-moe-postgres
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=palmoe
+      - POSTGRES_USER=palmoe
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-changeme123}
+      - PGDATA=/var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    networks:
+      - pal-moe-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palmoe -d palmoe"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 8GB
+        reservations:
+          cpus: '1.0'
+          memory: 4GB
+
+  nginx:
+    image: nginx:alpine
+    platform: linux/arm64
+    container_name: pal-moe-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+      - nginx-logs:/var/log/nginx
+    networks:
+      - pal-moe-network
+    depends_on:
+      - pal-moe-app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2GB
+        reservations:
+          cpus: '0.5'
+          memory: 1GB
+
+  monitoring:
+    image: prom/prometheus:latest
+    platform: linux/arm64
+    container_name: pal-moe-prometheus
+    restart: unless-stopped
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    networks:
+      - pal-moe-network
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2GB
+        reservations:
+          cpus: '0.5'
+          memory: 1GB
+
+  grafana:
+    image: grafana/grafana:latest
+    platform: linux/arm64
+    container_name: pal-moe-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_INSTALL_PLUGINS=grafana-piechart-panel
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+    networks:
+      - pal-moe-network
+    ports:
+      - "3001:3000"
+    depends_on:
+      - monitoring
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2GB
+        reservations:
+          cpus: '0.5'
+          memory: 1GB
+
+  backup-service:
+    image: pal-moe-backup:latest
+    platform: linux/arm64
+    build:
+      context: ..
+      dockerfile: deployment/Dockerfile.backup
+    container_name: pal-moe-backup
+    restart: unless-stopped
+    environment:
+      - BACKUP_SCHEDULE=0 2 * * *
+      - RETENTION_DAILY=7
+      - RETENTION_WEEKLY=4
+      - RETENTION_MONTHLY=12
+      - OCI_REGION=${OCI_REGION:-us-ashburn-1}
+      - BACKUP_BUCKET=pal-moe-backups-${TIMESTAMP}
+    volumes:
+      - ./backups:/app/backups:rw
+      - postgres-data:/var/lib/postgresql/data:ro
+      - redis-data:/data:ro
+      - oracle-block-volume:/app/data:ro
+    networks:
+      - pal-moe-network
+    depends_on:
+      - postgres
+      - redis
+      - pal-moe-app
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 2GB
+        reservations:
+          cpus: '0.5'
+          memory: 1GB
+
+volumes:
+  oracle-block-volume:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /mnt/block-volume
+  redis-data:
+    driver: local
+  postgres-data:
+    driver: local
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  nginx-logs:
+    driver: local
+
+networks:
+  pal-moe-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+# Oracle Cloud specific configurations
+x-oracle-cloud:
+  instance:
+    shape: VM.Standard.A1.Flex
+    ocpus: 4
+    memory: 24GB
+  load-balancer:
+    shape: 10Mbps-Micro
+    listeners:
+      - protocol: HTTP
+        port: 80
+      - protocol: HTTPS
+        port: 443
+    backend-sets:
+      - name: pal-moe-backend
+        policy: ROUND_ROBIN
+        health-checker:
+          protocol: HTTP
+          url-path: /health
+          port: 8080
+          interval: 30
+          timeout: 10
+          retries: 3
+  block-volume:
+    size: 100GB
+    performance: Balanced
+    backup-enabled: true
+  auto-scaling:
+    min-instances: 1
+    max-instances: 3
+    cpu-threshold: 70
+    memory-threshold: 80
+    scale-out-cooldown: 300
+    scale-in-cooldown: 600

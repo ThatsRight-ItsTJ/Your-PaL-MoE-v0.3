@@ -2,16 +2,22 @@
  * Pluggable Parser System
  * Extensible parsing framework for different model providers
  * Handles OpenAI, Anthropic, HuggingFace, and other providers
+ * Now includes Dynamic Model Parser for automatic format detection
  */
 
+const DynamicModelParser = require('./dynamic-parser');
+
 class ProviderParsers {
-    constructor() {
+    constructor(providerManager = null) {
         this.parsers = {
             openai: new OpenAIParser(),
             anthropic: new AnthropicParser(),
             huggingface: new HuggingFaceParser(),
             generic: new GenericParser()
         };
+
+        // Add dynamic parser for automatic format detection
+        this.dynamicParser = new DynamicModelParser(providerManager);
     }
 
     /**
@@ -41,6 +47,34 @@ class ProviderParsers {
     parseModelList(providerName, modelData, context = {}) {
         const parser = this.getParser(providerName);
         return parser.parseModelList(modelData, context);
+    }
+
+    /**
+     * Parse response using dynamic parser with automatic format detection
+     */
+    async parseResponseDynamic(response, providerName = null, context = {}) {
+        return await this.dynamicParser.parseResponse(response, providerName, context);
+    }
+
+    /**
+     * Extract models using dynamic parser with free tier detection
+     */
+    async extractModelsDynamic(response, providerName = null, context = {}) {
+        return await this.dynamicParser.extractModels(response, providerName, context);
+    }
+
+    /**
+     * Get dynamic parser statistics
+     */
+    getDynamicParserStats() {
+        return this.dynamicParser.getStats();
+    }
+
+    /**
+     * Clear dynamic parser cache
+     */
+    clearDynamicCache() {
+        this.dynamicParser.clearCache();
     }
 }
 

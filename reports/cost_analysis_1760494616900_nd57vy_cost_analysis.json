@@ -1,0 +1,16 @@
+{
+  "generated": "2025-10-15T02:16:56.903Z",
+  "period": "week",
+  "timestamp": "2025-10-15T02:16:56.900Z",
+  "summary": {
+    "totalRequests": 0,
+    "totalTokens": 0,
+    "totalCost": 0,
+    "activeUsers": 0,
+    "activeProviders": 0
+  },
+  "trends": [],
+  "breakdowns": {},
+  "forecasts": {},
+  "recommendations": []
+}
