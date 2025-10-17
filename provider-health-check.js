@@ -73,10 +73,19 @@ async function fetchProviderModels(modelEndpointURL, apiKey) {
     let models = [];
 
     if (Array.isArray(data)) {
-      models = data.map(item => item.id || item.name || item.model).filter(Boolean);
+      // Handle simple arrays like ["flux","kontext","turbo","gptimage"]
+      if (data.length > 0 && typeof data[0] === 'string') {
+        models = data.filter(item => typeof item === 'string' && item.trim());
+      } else {
+        // Handle arrays of objects - try multiple possible name fields
+        models = data.map(item => item.id || item.name || item.model || item.slug).filter(Boolean);
+      }
     } else if (data.models && Array.isArray(data.models)) {
       models = data.models.map(item => item.id || item.name || item.model).filter(Boolean);
     } else if (data.data && Array.isArray(data.data)) {
+      models = data.data.map(item => item.id || item.name || item.model || item.slug).filter(Boolean);
+    } else if (data.object === 'list' && data.data && Array.isArray(data.data)) {
+      // Handle OpenAI-style responses
       models = data.data.map(item => item.id || item.name || item.model).filter(Boolean);
     }
 
@@ -174,10 +183,15 @@ async function testProviderEndpoint(baseURL, apiKey, responseFormat, testModel, 
         input: 'This is a test input for embeddings'
       });
     } else if (baseURL.includes('text.pollinations.ai')) {
-      // Special case for Pollinations text - only prompt needed
+      // Special case for Pollinations text - model and messages needed
       testPayload = JSON.stringify({
+        model: testModel,
         messages: [{ role: 'user', content: 'Hello, this is a health check test.' }]
       });
+    } else if (baseURL.includes('image.pollinations.ai') && endpoint.includes('/prompt')) {
+      // Special case for Pollinations image - simple prompt parameter
+      testPayload = 'A simple test image for health check';
+      headers['Content-Type'] = 'text/plain'; // Override to plain text for prompt
     } else {
       // Generic test payload
       testPayload = JSON.stringify({ test: true });
@@ -212,22 +226,52 @@ async function testProviderEndpoint(baseURL, apiKey, responseFormat, testModel, 
     } else {
       // For JSON responses, check status and try to parse
       if (response.ok) {
-        try {
-          const responseData = await response.json();
+        // Special handling for image providers - if they return images, consider healthy
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.startsWith('image/')) {
           isHealthy = true;
           responseDetails = {
             status: response.status,
-            contentType: response.headers.get('content-type'),
-            hasData: !!responseData
+            contentType: contentType,
+            isImage: true
           };
-        } catch (parseError) {
-          // Response is not valid JSON
-          isHealthy = false;
-          responseDetails = {
-            status: response.status,
-            contentType: response.headers.get('content-type'),
-            parseError: parseError.message
-          };
+        } else if (contentType && contentType.includes('text/plain')) {
+          // Special handling for text responses (like Pollinations text)
+          try {
+            const textResponse = await response.text();
+            isHealthy = textResponse && textResponse.length > 0;
+            responseDetails = {
+              status: response.status,
+              contentType: contentType,
+              hasText: !!textResponse,
+              textLength: textResponse.length
+            };
+          } catch (textError) {
+            isHealthy = false;
+            responseDetails = {
+              status: response.status,
+              contentType: contentType,
+              textError: textError.message
+            };
+          }
+        } else {
+          try {
+            const responseData = await response.json();
+            isHealthy = true;
+            responseDetails = {
+              status: response.status,
+              contentType: response.headers.get('content-type'),
+              hasData: !!responseData
+            };
+          } catch (parseError) {
+            // Response is not valid JSON
+            isHealthy = false;
+            responseDetails = {
+              status: response.status,
+              contentType: response.headers.get('content-type'),
+              parseError: parseError.message
+            };
+          }
         }
       } else {
         // HTTP error status
@@ -388,6 +432,41 @@ async function performHealthCheck() {
         throw new Error(`Invalid base URL format: ${baseURL}`);
       }
 
+      // Special handling for NoAuth Pollinations text - use different endpoint
+      if (providerName === 'NoAuth_Pollinations_Text' && baseURL.includes('text.pollinations.ai')) {
+        // Get a real model name to test with
+        let testModel = await getTestModelForProvider(providerName, modelEndpointURL, apiKey, modelField);
+        providerResult.testModel = testModel;
+
+        // Skip format detection and test directly
+        const testEndpoint = '/'; // Use root endpoint for text pollinations
+        const responseFormat = 'json'; // Force JSON format for text pollinations
+
+        try {
+          const testResult = await testProviderEndpoint(baseURL, apiKey, responseFormat, testModel, testEndpoint);
+          providerResult.healthy = testResult.healthy;
+          providerResult.responseTime = testResult.responseTime;
+          providerResult.details = testResult.details;
+          providerResult.error = testResult.error;
+          providerResult.testModel = testResult.testModel;
+
+          if (testResult.healthy) {
+            log('info', `✅ ${providerName}: HEALTHY (${testResult.responseTime}ms) - tested with ${testModel}`);
+            results.healthy++;
+          } else {
+            log('warn', `❌ ${providerName}: UNHEALTHY (${testResult.responseTime}ms) - tested with ${testModel} - ${testResult.error || 'Unknown error'}`);
+            results.unhealthy++;
+          }
+        } catch (error) {
+          providerResult.error = sanitizeError(error);
+          log('error', `❌ ${providerName}: ERROR - ${providerResult.error}`);
+          results.unhealthy++;
+        }
+
+        results.results.push(providerResult);
+        return providerResult;
+      }
+
       // Get a real model name to test with
       let testModel = await getTestModelForProvider(providerName, modelEndpointURL, apiKey, modelField);
       providerResult.testModel = testModel;
@@ -402,12 +481,6 @@ async function performHealthCheck() {
         testEndpoint = '/prompt/test'; // Image generation endpoint
       } else if (providerName.toLowerCase().includes('embedding')) {
         testEndpoint = '/v1/embeddings';
-      }
-
-      // Special handling for NoAuth Pollinations text - use different endpoint
-      if (providerName === 'NoAuth_Pollinations_Text' && baseURL.includes('text.pollinations.ai')) {
-        testEndpoint = '/'; // Use root endpoint for text pollinations
-        testModel = null; // No model needed for this endpoint
       }
 
       // Perform the health check
