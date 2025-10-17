@@ -144,7 +144,7 @@ class TaskMaster extends EventEmitter {
         const requestData = this.prepareRequest(tool.endpoint, parameters, providerConfig);
 
         // Make the API call
-        const fetch = await import('node-fetch');
+        const fetch = require('node-fetch');
         const targetUrl = `${providerConfig.base_url.replace(/\/+$/, '')}${tool.endpoint}`;
 
         const headers = {

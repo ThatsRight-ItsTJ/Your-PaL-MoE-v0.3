@@ -58,6 +58,9 @@
       "text",
       "lcov",
       "html"
+    ],
+    "transformIgnorePatterns": [
+      "node_modules/(?!(node-fetch)/)"
     ]
   },
   "config": {
