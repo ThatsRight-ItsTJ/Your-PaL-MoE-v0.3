@@ -1,0 +1,248 @@
+{
+  "timestamp": "2025-10-16T04:51:34.116Z",
+  "total": 15,
+  "healthy": 0,
+  "unhealthy": 15,
+  "results": [
+    {
+      "index": 1,
+      "name": "NoAuth_Pollinations_Text",
+      "baseURL": "https://text.pollinations.ai/",
+      "hasApiKey": false,
+      "modelEndpointURL": "https://text.pollinations.ai/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 2,
+      "name": "NoAuth_Pollinations_Image",
+      "baseURL": "https://image.pollinations.ai/prompt/",
+      "hasApiKey": false,
+      "modelEndpointURL": "https://image.pollinations.ai/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 3,
+      "name": "OpenRouter",
+      "baseURL": "https://openrouter.ai/api/v1/chat/completions",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://openrouter.ai/api/frontend/models?max_price=0",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 4,
+      "name": "ImageRouter",
+      "baseURL": "https://api.imagerouter.io/v1/openai/images/generations",
+      "hasApiKey": true,
+      "modelEndpointURL": "google/gemini-2.5-flash:free|black-forest-labs/FLUX-1-schnell:free|HiDream-ai/HiDream-I1-Full:free|lodestones/Chroma:free",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 5,
+      "name": "Pollinations_Text",
+      "baseURL": "https://text.pollinations.ai/",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://text.pollinations.ai/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 6,
+      "name": "Pollinations_Image",
+      "baseURL": "https://image.pollinations.ai/prompt/",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://image.pollinations.ai/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 7,
+      "name": "Zuki_Journey",
+      "baseURL": "https://api.zukijourney.com/v1",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://api.zukijourney.com/v1/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 8,
+      "name": "HelixMind",
+      "baseURL": "https://helixmind.online/v1",
+      "hasApiKey": true,
+      "modelEndpointURL": "gpt-4o",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 9,
+      "name": "VoidAI",
+      "baseURL": "https://api.voidai.app/v1",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://api.voidai.app/v1/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 10,
+      "name": "MNNAI",
+      "baseURL": "https://api.mnnai.ru/v1/",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://api.mnnai.ru/v1/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 11,
+      "name": "Z.ai",
+      "baseURL": "https://api.z.ai/api/paas/v4/",
+      "hasApiKey": true,
+      "modelEndpointURL": "GLM-4.5-Flash",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 12,
+      "name": "Bigmodel.cn",
+      "baseURL": "https://open.bigmodel.cn/api/paas/v4/",
+      "hasApiKey": true,
+      "modelEndpointURL": "glm-z1-flash|glm-4-flash-250414|glm-realtime-flash|glm-realtime|glm-realtime-air|glm-4-32b-0414-128k|glm-4.1v-thinking-flash|glm-4-flash|glm-4v-flash|cogview-3-flash|cogvideox-flash|glm-experimental-preview",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 13,
+      "name": "ElectronHub",
+      "baseURL": "https://api.electronhub.ai",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://api.electronhub.ai/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 14,
+      "name": "NavyAI",
+      "baseURL": "https://api.navy/v1/",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://api.navy/v1/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    },
+    {
+      "index": 15,
+      "name": "Gihub_Models",
+      "baseURL": "https://models.github.ai",
+      "hasApiKey": true,
+      "modelEndpointURL": "https://models.github.ai/catalog/models",
+      "modelField": "",
+      "healthy": false,
+      "responseTime": null,
+      "error": {
+        "message": "Operation failed",
+        "code": "UNKNOWN_ERROR"
+      },
+      "details": null,
+      "testModel": null
+    }
+  ]
+}
